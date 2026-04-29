@@ -1,0 +1,44 @@
+name: MedScan AI CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate-and-build:
+    name: Validate and Build SAM Project
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install AWS SAM CLI
+        run: |
+          pip install aws-sam-cli
+
+      - name: Show tool versions
+        run: |
+          python --version
+          sam --version
+
+      - name: Validate SAM template
+        run: |
+          sam validate --template-file template.yaml --region us-east-1
+
+      - name: Build SAM project
+        run: |
+          sam build --template-file template.yaml
+
+      - name: Check Python syntax
+        run: |
+          python -m compileall src
