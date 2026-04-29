@@ -46,7 +46,7 @@ Globals:
         TABLE_NAME: !Ref MetadataTable
         TTL_RETENTION_DAYS: "1"
         HF_SPACE_ID: Zakia/pneumonia-detection-with-fast.ai-and-gradio
-
+        HF_API_TIMEOUT_SECONDS: "20"
 Resources:
 
   MetadataTable:

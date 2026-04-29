@@ -8,6 +8,7 @@ import io
 import os
 import tempfile
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from botocore.exceptions import ClientError
 from gradio_client import Client, handle_file
@@ -30,6 +31,7 @@ HF_SPACE_ID = os.environ.get(
 )
 TTL_RETENTION_DAYS = int(os.environ.get("TTL_RETENTION_DAYS", "1"))
 MAX_FILE_SIZE_MB = int(os.environ.get("MAX_FILE_SIZE_MB", "10"))
+HF_API_TIMEOUT_SECONDS = int(os.environ.get("HF_API_TIMEOUT_SECONDS", "20"))
 
 table = dynamodb.Table(TABLE_NAME)
 
@@ -352,7 +354,58 @@ def analyze_with_gradio(local_image_path):
         "hfRawResult": json.dumps(result, default=str)
     }
 
+# =========================
+# Helper: Gradio timeout wrapper
+# =========================
+def analyze_with_gradio_timeout(local_image_path, timeout_seconds=HF_API_TIMEOUT_SECONDS):
+    """
+    Runs the external Hugging Face / Gradio call with a timeout.
 
+    This prevents the Processing Lambda from waiting too long if the
+    external AI service is slow or unavailable.
+    """
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(analyze_with_gradio, local_image_path)
+
+    try:
+        return future.result(timeout=timeout_seconds)
+
+    except FuturesTimeoutError:
+        future.cancel()
+        raise TimeoutError(
+            f"Hugging Face / Gradio API timeout after {timeout_seconds} seconds"
+        )
+
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+# =========================
+# Helper: build model error result
+# =========================
+def build_model_error_result(error_message):
+    """
+    Creates a safe fallback result if the external AI model fails.
+    """
+
+    return {
+        "medicalFinding": "UNKNOWN",
+        "riskLevel": "UNKNOWN",
+        "riskScore": Decimal("0"),
+        "pneumoniaScore": Decimal("0"),
+        "normalScore": Decimal("0"),
+        "topLabel": "UNKNOWN",
+        "topScore": Decimal("0"),
+        "modelScores": [],
+        "status": "MODEL_ERROR",
+        "medicalDescription": (
+            "Die automatische KI-Analyse konnte nicht durchgeführt werden. "
+            "Eine menschliche Überprüfung ist erforderlich."
+        ),
+        "hfRawResult": "",
+        "hfError": str(error_message)
+    }
 # =========================
 # Main Lambda Handler
 # =========================
@@ -518,28 +571,11 @@ def lambda_handler(event, context):
 
         # AI analysis
         try:
-            medical_result = analyze_with_gradio(temp_file_path)
+            medical_result = analyze_with_gradio_timeout(temp_file_path)
 
         except Exception as hf_error:
             print("Gradio/Hugging Face error:", str(hf_error))
-
-            medical_result = {
-                "medicalFinding": "UNKNOWN",
-                "riskLevel": "UNKNOWN",
-                "riskScore": Decimal("0"),
-                "pneumoniaScore": Decimal("0"),
-                "normalScore": Decimal("0"),
-                "topLabel": "UNKNOWN",
-                "topScore": Decimal("0"),
-                "modelScores": [],
-                "status": "MODEL_ERROR",
-                "medicalDescription": (
-                    "Die automatische KI-Analyse konnte nicht durchgeführt werden. "
-                    "Eine menschliche Überprüfung ist erforderlich."
-                ),
-                "hfRawResult": "",
-                "hfError": str(hf_error)
-            }
+        medical_result = build_model_error_result(str(hf_error))
 
         print("Medical Result:", medical_result)
 
