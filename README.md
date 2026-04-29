@@ -1,5 +1,7 @@
 # MedScan AI – Serverless Thorax-Röntgenanalyse auf AWS
+
 [![MedScan AI CI](https://github.com/meselekgkp-ui/medscan-ai-cloud-iac/actions/workflows/ci.yml/badge.svg)](https://github.com/meselekgkp-ui/medscan-ai-cloud-iac/actions/workflows/ci.yml)
+
 MedScan AI ist ein cloud-nativer, serverloser Prototyp zur Analyse von Thorax-Röntgenbildern.  
 Das System ermöglicht den Upload eines Röntgenbildes über eine Weboberfläche, verarbeitet das Bild asynchron, ruft ein externes KI-Modell über Hugging Face Gradio auf, speichert das Ergebnis in DynamoDB und zeigt die Auswertung anschließend im Frontend an.
 
@@ -22,6 +24,7 @@ Der Schwerpunkt liegt auf folgenden Themen:
 - Automatische Datenlöschung durch DynamoDB TTL und S3 Lifecycle Rules
 - Monitoring mit Amazon CloudWatch
 - Infrastructure as Code mit AWS SAM
+- Automatische Validierung über GitHub Actions CI
 
 ---
 
@@ -89,6 +92,7 @@ Frontend zeigt das Ergebnis an
 | S3 Server-Side Encryption | Schutz gespeicherter Bilddaten |
 | Amazon CloudWatch | Logs, Metriken, Dashboard und Alarme |
 | AWS SAM | Beschreibung der Infrastruktur als Code |
+| GitHub Actions | Automatische Validierung und Build-Prüfung des Projekts |
 
 ---
 
@@ -515,12 +519,18 @@ medscan-ai-iac/
 │   template.yaml
 │
 ├── docs/
+│   ├── api-contract.md
+│   ├── threat-model.md
 │   ├── current-resources.md
 │   └── iac-validation.md
 │
 ├── diagrams/
 │
 ├── screenshots/
+│
+├── .github/
+│   └── workflows/
+│       └── ci.yml
 │
 └── src/
     ├── generate_upload_url/
@@ -533,18 +543,45 @@ medscan-ai-iac/
         ├── app.py
         └── requirements.txt
 ```
+
 ---
-## Dokumentation
+
+## 15. Dokumentation
 
 Weitere technische Dokumentation befindet sich im Ordner `docs/`.
 
-- [API Contract](docs/api-contract.md)
-- [Threat Model](docs/threat-model.md)
-- [Current Resources](docs/current-resources.md)
-- [IaC Validation](docs/iac-validation.md)
+| Dokument | Beschreibung |
+|---|---|
+| [API Contract](docs/api-contract.md) | Beschreibt die HTTP-Endpunkte, Requests, Responses, Statuswerte und Fehlerfälle |
+| [Threat Model](docs/threat-model.md) | Dokumentiert zentrale Sicherheitsrisiken und Gegenmaßnahmen |
+| [Current Resources](docs/current-resources.md) | Listet die aktuell verwendeten AWS-Ressourcen der Demo-Umgebung |
+| [IaC Validation](docs/iac-validation.md) | Dokumentiert die lokale Validierung und den SAM Build |
+
 ---
 
-## 15. Lokale Voraussetzungen
+## 16. Continuous Integration
+
+Das Repository verwendet GitHub Actions für eine einfache CI-Prüfung.
+
+Bei jedem Push auf den `main` Branch wird automatisch geprüft:
+
+- Python-Version
+- SAM CLI Installation
+- SAM Template Validation
+- SAM Build
+- Python Syntax Check
+
+Die Workflow-Datei befindet sich unter:
+
+```text
+.github/workflows/ci.yml
+```
+
+Dadurch wird sichergestellt, dass das SAM-Projekt weiterhin validierbar und baubar ist.
+
+---
+
+## 17. Lokale Voraussetzungen
 
 Die lokale Entwicklungsumgebung verwendet:
 
@@ -576,7 +613,7 @@ $env:SAM_CLI_TELEMETRY="0"
 
 ---
 
-## 16. SAM Template validieren
+## 18. SAM Template validieren
 
 Befehl:
 
@@ -592,7 +629,7 @@ template.yaml is a valid SAM Template
 
 ---
 
-## 17. SAM Projekt bauen
+## 19. SAM Projekt bauen
 
 Befehl:
 
@@ -611,7 +648,7 @@ Built Template   : .aws-sam\build\template.yaml
 
 ---
 
-## 18. Deployment-Hinweis
+## 20. Deployment-Hinweis
 
 Das SAM Template wurde erfolgreich validiert und lokal gebaut.
 
@@ -626,7 +663,7 @@ sam deploy --guided --region us-east-1
 
 ---
 
-## 19. Warum diese Dienste verwendet wurden
+## 21. Warum diese Dienste verwendet wurden
 
 ### Warum Amazon S3?
 
@@ -658,9 +695,13 @@ CloudWatch bietet Logs, Metriken, Dashboards und Alarme für den Betrieb und die
 
 SAM macht die Serverless-Architektur reproduzierbar, versionierbar und dokumentierbar.
 
+### Warum GitHub Actions?
+
+GitHub Actions überprüft automatisch, ob das SAM Template valide ist, das Projekt gebaut werden kann und keine offensichtlichen Python-Syntaxfehler vorhanden sind.
+
 ---
 
-## 20. Warum bestimmte Dienste nicht verwendet wurden
+## 22. Warum bestimmte Dienste nicht verwendet wurden
 
 ### Warum nicht EC2?
 
@@ -697,7 +738,7 @@ Eine VPC würde die Architektur komplexer machen, ohne für diesen Use Case eine
 
 ---
 
-## 21. Einschränkungen
+## 23. Einschränkungen
 
 Dieses Projekt ist ein Prototyp und hat folgende Einschränkungen:
 
@@ -708,10 +749,11 @@ Dieses Projekt ist ein Prototyp und hat folgende Einschränkungen:
 - Es gibt noch keine Benutzeranmeldung.
 - Es dürfen keine echten Patientendaten hochgeladen werden.
 - Das Deployment wurde wegen möglicher AWS-Academy-Berechtigungsgrenzen nicht über SAM ausgeführt.
+- Die GitHub Actions CI validiert und baut das Projekt, führt aber kein AWS Deployment aus.
 
 ---
 
-## 22. Mögliche Weiterentwicklungen
+## 24. Mögliche Weiterentwicklungen
 
 Mögliche Verbesserungen für eine produktionsnähere Version:
 
@@ -722,13 +764,13 @@ Mögliche Verbesserungen für eine produktionsnähere Version:
 - Hosting des KI-Modells innerhalb von AWS, zum Beispiel mit Amazon SageMaker
 - Strukturierte Logs mit Correlation IDs
 - Automatisierte Tests
-- CI/CD Pipeline mit GitHub Actions
+- CI/CD Deployment Pipeline mit GitHub Actions
 - Stärkere IAM Least-Privilege-Rollen
 - Modellbewertung mit Accuracy, False Positives und False Negatives
 
 ---
 
-## 23. Medizinischer Hinweis
+## 25. Medizinischer Hinweis
 
 Dieses Projekt dient ausschließlich Bildungs- und Demonstrationszwecken.
 
@@ -737,7 +779,7 @@ Alle Ergebnisse müssen von qualifiziertem medizinischem Fachpersonal überprüf
 
 ---
 
-## 24. Projektstatus
+## 26. Projektstatus
 
 Aktueller Stand:
 
@@ -756,11 +798,14 @@ Idempotency implementiert
 Infrastructure as Code vorbereitet
 SAM Validation erfolgreich
 SAM Build erfolgreich
+GitHub Actions CI erfolgreich
+API Contract dokumentiert
+Threat Model dokumentiert
 ```
 
 ---
 
-## 25. Autor
+## 27. Autor
 
 ```text
 Ayman Meseleklayame
@@ -769,4 +814,3 @@ Cloud Computing Portfolio Project
 Technische Hochschule Deggendorf
 Summer Term 2026
 ```
----
