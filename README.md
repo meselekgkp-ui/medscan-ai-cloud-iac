@@ -563,7 +563,7 @@ Weitere technische Dokumentation befindet sich im Ordner `docs/`.
 | [Threat Model](docs/threat-model.md) | Dokumentiert zentrale Sicherheitsrisiken und Gegenmaßnahmen |
 | [Current Resources](docs/current-resources.md) | Listet die aktuell verwendeten AWS-Ressourcen der Demo-Umgebung |
 | [IaC Validation](docs/iac-validation.md) | Dokumentiert die lokale Validierung und den SAM Build |
-
+| [Testing](docs/testing.md) | Beschreibt Unit Tests, lokale Testausführung und GitHub Actions Integration |
 ---
 
 ## 16. Continuous Integration
