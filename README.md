@@ -1,5 +1,5 @@
 # MedScan AI – Serverless Thorax-Röntgenanalyse auf AWS
-
+[![MedScan AI CI](https://github.com/meselekgkp-ui/medscan-ai-cloud-iac/actions/workflows/ci.yml/badge.svg)](https://github.com/meselekgkp-ui/medscan-ai-cloud-iac/actions/workflows/ci.yml)
 MedScan AI ist ein cloud-nativer, serverloser Prototyp zur Analyse von Thorax-Röntgenbildern.  
 Das System ermöglicht den Upload eines Röntgenbildes über eine Weboberfläche, verarbeitet das Bild asynchron, ruft ein externes KI-Modell über Hugging Face Gradio auf, speichert das Ergebnis in DynamoDB und zeigt die Auswertung anschließend im Frontend an.
 
