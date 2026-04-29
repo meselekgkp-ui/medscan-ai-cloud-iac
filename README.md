@@ -546,6 +546,13 @@ medscan-ai-iac/
 
 ---
 
+## Projektstatus
+
+- Basic Unit Tests implementiert
+- pytest: 8 Tests erfolgreich
+
+---
+
 ## 15. Dokumentation
 
 Weitere technische Dokumentation befindet sich im Ordner `docs/`.
@@ -570,6 +577,7 @@ Bei jedem Push auf den `main` Branch wird automatisch geprüft:
 - SAM Template Validation
 - SAM Build
 - Python Syntax Check
+- Unit Tests mit pytest
 
 Die Workflow-Datei befindet sich unter:
 
