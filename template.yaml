@@ -1,0 +1,472 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: MedScan AI serverless chest X-ray analysis architecture with monitoring
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: medscan-ai
+
+  ExistingLambdaRoleArn:
+    Type: String
+    Default: arn:aws:iam::969514361475:role/LabRole
+    Description: Existing IAM role ARN used by Lambda functions in AWS Academy Learner Lab
+
+  FrontendBucketName:
+    Type: String
+    Default: medical-xray-web-ayman-iac
+
+  MedicalBucketName:
+    Type: String
+    Default: medical-xray-input-ayman-iac
+
+  MetadataTableName:
+    Type: String
+    Default: ImageProcessingMetadataIac
+
+  ProcessingQueueName:
+    Type: String
+    Default: medical-xray-processing-queue-iac
+
+  DeadLetterQueueName:
+    Type: String
+    Default: medical-xray-processing-dlq-iac
+
+  DashboardName:
+    Type: String
+    Default: MedScanAI-Operations-Dashboard-IaC
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 30
+    MemorySize: 1024
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref MetadataTable
+        TTL_RETENTION_DAYS: "1"
+        HF_SPACE_ID: Zakia/pneumonia-detection-with-fast.ai-and-gradio
+
+Resources:
+
+  MetadataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref MetadataTableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Ref DeadLetterQueueName
+      MessageRetentionPeriod: 1209600
+
+  ProcessingQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Ref ProcessingQueueName
+      VisibilityTimeout: 120
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+  ProcessingQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref ProcessingQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowS3ToSendMessagesToProcessingQueue
+            Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt ProcessingQueue.Arn
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub "arn:aws:s3:::${MedicalBucketName}"
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref FrontendBucketName
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadForStaticWebsite
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${FrontendBucketName}/*"
+
+  MedicalBucket:
+    Type: AWS::S3::Bucket
+    DependsOn:
+      - ProcessingQueuePolicy
+    Properties:
+      BucketName: !Ref MedicalBucketName
+
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - "*"
+            AllowedMethods:
+              - PUT
+              - POST
+              - GET
+              - HEAD
+            AllowedHeaders:
+              - "*"
+            MaxAge: 3000
+
+      NotificationConfiguration:
+        QueueConfigurations:
+          - Event: s3:ObjectCreated:*
+            Queue: !GetAtt ProcessingQueue.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: medical-input/
+
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteMedicalImagesAfterOneDay
+            Status: Enabled
+            ExpirationInDays: 1
+
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+
+  MedScanApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+
+  GenerateUploadUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-generate-upload-url"
+      CodeUri: src/generate_upload_url/
+      Handler: app.lambda_handler
+      Role: !Ref ExistingLambdaRoleArn
+      Timeout: 10
+      MemorySize: 256
+      Environment:
+        Variables:
+          BUCKET_NAME: !Ref MedicalBucket
+          UPLOAD_PREFIX: medical-input/
+          URL_EXPIRES_SECONDS: "300"
+      Events:
+        UploadUrlApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MedScanApi
+            Path: /upload-url
+            Method: POST
+
+  ProcessingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-processing"
+      CodeUri: src/processing/
+      Handler: app.lambda_handler
+      Role: !Ref ExistingLambdaRoleArn
+      Timeout: 90
+      MemorySize: 1024
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref MetadataTable
+          TTL_RETENTION_DAYS: "1"
+          HF_SPACE_ID: Zakia/pneumonia-detection-with-fast.ai-and-gradio
+          MAX_FILE_SIZE_MB: "10"
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ProcessingQueue.Arn
+            BatchSize: 1
+            Enabled: true
+
+  GetMedicalResultFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-get-medical-result"
+      CodeUri: src/get_result/
+      Handler: app.lambda_handler
+      Role: !Ref ExistingLambdaRoleArn
+      Timeout: 10
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref MetadataTable
+      Events:
+        ResultApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MedScanApi
+            Path: /result
+            Method: GET
+
+  LambdaErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: MedScanAI-Lambda-Errors-IaC
+      AlarmDescription: Processing Lambda has at least one error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ProcessingFunction
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  LambdaHighDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: MedScanAI-Lambda-HighDuration-IaC
+      AlarmDescription: Processing Lambda duration is higher than expected.
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ProcessingFunction
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 10000
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  SQSBacklogAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: MedScanAI-SQS-Backlog-IaC
+      AlarmDescription: Processing queue contains visible messages waiting for processing.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref ProcessingQueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  SQSOldestMessageTooOldAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: MedScanAI-SQS-OldestMessageTooOld-IaC
+      AlarmDescription: Oldest SQS message is older than 5 minutes.
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref ProcessingQueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 300
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  DLQHasMessagesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: MedScanAI-DLQ-HasMessages-IaC
+      AlarmDescription: Dead-letter queue contains failed messages.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref DeadLetterQueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  OperationsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Ref DashboardName
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "alarm",
+              "x": 0,
+              "y": 0,
+              "width": 24,
+              "height": 3,
+              "properties": {
+                "title": "MedScan AI Alarm Status",
+                "alarms": [
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:MedScanAI-SQS-Backlog-IaC",
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:MedScanAI-SQS-OldestMessageTooOld-IaC",
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:MedScanAI-DLQ-HasMessages-IaC",
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:MedScanAI-Lambda-Errors-IaC",
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:MedScanAI-Lambda-HighDuration-IaC"
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 3,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Lambda Processing Overview",
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false,
+                "period": 60,
+                "metrics": [
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${ProcessingFunction}", { "stat": "Sum", "label": "Invocations" } ],
+                  [ ".", "Errors", ".", ".", { "stat": "Sum", "label": "Errors" } ],
+                  [ ".", "Duration", ".", ".", { "stat": "Average", "label": "Duration avg" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 3,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "SQS Processing Queue Health",
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stacked": false,
+                "period": 60,
+                "metrics": [
+                  [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${ProcessingQueueName}", { "stat": "Maximum", "label": "Messages visible" } ],
+                  [ ".", "ApproximateNumberOfMessagesNotVisible", ".", ".", { "stat": "Maximum", "label": "Messages not visible" } ],
+                  [ ".", "ApproximateAgeOfOldestMessage", ".", ".", { "stat": "Maximum", "label": "Oldest message age" } ],
+                  [ ".", "NumberOfMessagesSent", ".", ".", { "stat": "Sum", "label": "Messages sent" } ],
+                  [ ".", "NumberOfMessagesReceived", ".", ".", { "stat": "Sum", "label": "Messages received" } ],
+                  [ ".", "NumberOfMessagesDeleted", ".", ".", { "stat": "Sum", "label": "Messages deleted" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 9,
+              "width": 8,
+              "height": 5,
+              "properties": {
+                "title": "DLQ Failed Messages",
+                "region": "${AWS::Region}",
+                "view": "singleValue",
+                "period": 60,
+                "metrics": [
+                  [ "AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${DeadLetterQueueName}", { "stat": "Maximum", "label": "DLQ visible messages" } ]
+                ]
+              }
+            },
+            {
+              "type": "log",
+              "x": 8,
+              "y": 9,
+              "width": 16,
+              "height": 7,
+              "properties": {
+                "title": "Recent Processing Logs",
+                "region": "${AWS::Region}",
+                "view": "table",
+                "query": "SOURCE '/aws/lambda/${ProcessingFunction}' | fields @timestamp, @message | filter @message like /Fehler|ERROR|Idempotency|Duplicate|DynamoDB|Gradio|saved|processed|gespeichert/ | sort @timestamp desc | limit 30"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${MedScanApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  FrontendBucket:
+    Description: Frontend S3 bucket
+    Value: !Ref FrontendBucket
+
+  FrontendWebsiteUrl:
+    Description: S3 static website URL
+    Value: !GetAtt FrontendBucket.WebsiteURL
+
+  MedicalBucket:
+    Description: Medical image S3 bucket
+    Value: !Ref MedicalBucket
+
+  DynamoDBTable:
+    Description: DynamoDB metadata table
+    Value: !Ref MetadataTable
+
+  ProcessingQueue:
+    Description: SQS processing queue
+    Value: !Ref ProcessingQueue
+
+  DeadLetterQueue:
+    Description: SQS dead-letter queue
+    Value: !Ref DeadLetterQueue
+
+  DashboardName:
+    Description: CloudWatch dashboard name
+    Value: !Ref OperationsDashboard
