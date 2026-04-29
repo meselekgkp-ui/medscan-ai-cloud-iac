@@ -533,7 +533,15 @@ medscan-ai-iac/
         ├── app.py
         └── requirements.txt
 ```
+---
+## Dokumentation
 
+Weitere technische Dokumentation befindet sich im Ordner `docs/`.
+
+- [API Contract](docs/api-contract.md)
+- [Threat Model](docs/threat-model.md)
+- [Current Resources](docs/current-resources.md)
+- [IaC Validation](docs/iac-validation.md)
 ---
 
 ## 15. Lokale Voraussetzungen
@@ -761,4 +769,4 @@ Cloud Computing Portfolio Project
 Technische Hochschule Deggendorf
 Summer Term 2026
 ```
-- [API Contract](docs/api-contract.md)
+---
