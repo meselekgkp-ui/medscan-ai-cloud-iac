@@ -6,7 +6,7 @@ Dieses Dokument beschreibt die HTTP-API, die das MedScan-AI-Frontend verwendet, 
 
 
 
-Die API wird über Amazon API Gateway bereitgestellt und verbindet das Frontend mit den Lambda-Funktionen für Upload-URL-Erstellung und Ergebnisabfrage.
+Die API wird über Amazon API Gateway bereitgestellt und verbindet das Frontend mit den Lambda-Funktionen für die Upload-URL-Erstellung und die Ergebnisabfrage.
 
 
 
@@ -18,7 +18,7 @@ Die API wird über Amazon API Gateway bereitgestellt und verbindet das Frontend 
 
 
 
-Das Frontend verwendet zwei zentrale API-Endpunkte:
+Das Frontend verwendet zwei zentrale API-Endpunkte.
 
 
 
@@ -26,9 +26,9 @@ Das Frontend verwendet zwei zentrale API-Endpunkte:
 
 |---|---|---|
 
-| POST | `/upload-url` | Erstellt eine Presigned URL für den direkten Upload nach Amazon S3 |
+| `POST` | `/upload-url` | Erstellt eine Presigned URL für den direkten Upload nach Amazon S3 |
 
-| GET | `/result` | Liefert das Analyseergebnis aus DynamoDB zurück |
+| `GET` | `/result` | Liefert das Analyseergebnis aus DynamoDB zurück |
 
 
 
@@ -40,7 +40,7 @@ Der eigentliche Bild-Upload läuft nicht über API Gateway oder Lambda. Stattdes
 
 
 
-\## 2. POST /upload-url
+\## 2. POST `/upload-url`
 
 
 
@@ -100,25 +100,25 @@ Content-Type: application/json
 
 |---|---|---|---|
 
-| `filename` | string | ja | Ursprünglicher Dateiname des ausgewählten Bildes |
+| `filename` | `string` | Ja | Ursprünglicher Dateiname des ausgewählten Bildes |
 
-| `contentType` | string | ja | MIME-Type der Datei |
-
-
-
-Unterstützte Content Types:
+| `contentType` | `string` | Ja | MIME-Type der Datei |
 
 
 
-```text
+\### Unterstützte Content Types
 
-image/jpeg
 
-image/jpg
 
-image/png
+| Content Type |
 
-```
+|---|
+
+| `image/jpeg` |
+
+| `image/jpg` |
+
+| `image/png` |
 
 
 
@@ -152,9 +152,9 @@ image/png
 
 |---|---|---|
 
-| `uploadUrl` | string | Temporäre Presigned URL für den direkten Upload nach S3 |
+| `uploadUrl` | `string` | Temporäre Presigned URL für den direkten Upload nach S3 |
 
-| `key` | string | S3 Object Key des hochgeladenen Bildes |
+| `key` | `string` | S3 Object Key des hochgeladenen Bildes |
 
 
 
@@ -182,7 +182,7 @@ medical-input/20260429-100927-445e26a5-person1000\_bacteria\_2931.jpeg
 
 
 
-\### Mögliche Fehlerantworten
+\### Fehlerantworten
 
 
 
@@ -242,7 +242,7 @@ medical-input/
 
 
 
-Ablauf:
+\### Upload-Ablauf
 
 
 
@@ -260,7 +260,7 @@ Frontend
 
 
 
-Der Upload erzeugt anschließend ein S3 ObjectCreated Event.
+Der Upload erzeugt anschließend ein S3 `ObjectCreated` Event.
 
 
 
@@ -288,7 +288,7 @@ S3 ObjectCreated Event
 
 
 
-\## 4. GET /result
+\## 4. GET `/result`
 
 
 
@@ -344,7 +344,7 @@ GET /result?id=medical-input/20260429-100927-example.jpeg
 
 |---|---|---|---|
 
-| `id` | string | ja | S3 Object Key des hochgeladenen Bildes |
+| `id` | `string` | Ja | S3 Object Key des hochgeladenen Bildes |
 
 
 
@@ -402,25 +402,25 @@ Der Parameter `id` entspricht dem Partition Key in DynamoDB.
 
 |---|---|---|
 
-| `id` | string | S3 Object Key und DynamoDB Partition Key |
+| `id` | `string` | S3 Object Key und DynamoDB Partition Key |
 
-| `status` | string | Technischer Verarbeitungsstatus |
+| `status` | `string` | Technischer Verarbeitungsstatus |
 
-| `medicalFinding` | string | Medizinisch interpretierte KI-Klassifikation |
+| `medicalFinding` | `string` | Interpretierte KI-Klassifikation |
 
-| `riskLevel` | string | Risikostufe: LOW, MEDIUM oder HIGH |
+| `riskLevel` | `string` | Risikostufe: LOW, MEDIUM oder HIGH |
 
-| `pneumoniaScore` | number | Wahrscheinlichkeit für Pneumonie |
+| `pneumoniaScore` | `number` | Wahrscheinlichkeit für Pneumonie |
 
-| `normalScore` | number | Wahrscheinlichkeit für Normalbefund |
+| `normalScore` | `number` | Wahrscheinlichkeit für Normalbefund |
 
-| `topLabel` | string | Höchste Modellklasse |
+| `topLabel` | `string` | Höchste Modellklasse |
 
-| `topScore` | number | Höchster Modellscore |
+| `topScore` | `number` | Höchster Modellscore |
 
-| `medicalDescription` | string | Beschreibung des Ergebnisses |
+| `medicalDescription` | `string` | Beschreibung des Ergebnisses |
 
-| `disclaimer` | string | Hinweis, dass es keine medizinische Diagnose ist |
+| `disclaimer` | `string` | Hinweis, dass es keine medizinische Diagnose ist |
 
 
 
@@ -472,7 +472,7 @@ Die Processing Lambda wandelt die Modellwerte in eine einfache Risikoklassifikat
 
 | `>= 0.70` | `HIGH` | `PNEUMONIA\_SUSPECTED` |
 
-| `>= 0.40` und `< 0.70` | `MEDIUM` | `PNEUMONIA\_UNCLEAR` |
+| `>= 0.40 und < 0.70` | `MEDIUM` | `PNEUMONIA\_UNCLEAR` |
 
 | `< 0.40` | `LOW` | `NO\_PNEUMONIA\_SUSPECTED` |
 
