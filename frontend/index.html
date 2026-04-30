@@ -816,7 +816,7 @@
   </main>
 
   <script>
-    const API_BASE = "https://7sohsdyrhe.execute-api.us-east-1.amazonaws.com";
+    const API_BASE = "https://3rhly6kvse.execute-api.us-east-1.amazonaws.com/prod";
 
     let selectedFile = null;
 
@@ -936,6 +936,7 @@
 
       const map = {
         "PNEUMONIA_SUSPECTED": "Pneumonie-Verdacht erkannt",
+        "PNEUMONIA_UNCLEAR": "Unklarer Pneumonie-Befund",
         "NO_PNEUMONIA_SUSPECTED": "Kein Pneumonie-Verdacht erkannt",
         "UNKNOWN": "Unbekanntes Ergebnis"
       };
@@ -1133,20 +1134,44 @@
       const maxAttempts = 25;
       const delayMs = 3000;
 
+      const terminalStatuses = [
+        "COMPLETED",
+        "NEEDS_HUMAN_REVIEW",
+        "NEEDS_URGENT_HUMAN_REVIEW",
+        "MODEL_ERROR",
+        "INVALID_FILE",
+        "PROCESSING_FAILED"
+      ];
+
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         loadingText.textContent = `Analyse läuft... Versuch ${attempt}/${maxAttempts}`;
 
         const resultResponse = await fetch(
-          `${API_BASE}/result?key=${encodeURIComponent(key)}`
+          `${API_BASE}/result?id=${encodeURIComponent(key)}`
         );
 
-        const data = await resultResponse.json();
-
-        if (resultResponse.status === 200 && data.status === "DONE" && data.result) {
-          return data.result;
+        let data = {};
+        try {
+          data = await resultResponse.json();
+        } catch (_) {
+          data = {};
         }
 
-        if (resultResponse.status !== 202 && resultResponse.status !== 200) {
+        if (resultResponse.status === 200 && terminalStatuses.includes(data.status)) {
+          return data;
+        }
+
+        if (resultResponse.status === 200 && data.status === "PROCESSING") {
+          await sleep(delayMs);
+          continue;
+        }
+
+        if (resultResponse.status === 404 || resultResponse.status === 202) {
+          await sleep(delayMs);
+          continue;
+        }
+
+        if (resultResponse.status !== 200) {
           throw new Error("Result API Fehler: " + JSON.stringify(data));
         }
 
@@ -1166,7 +1191,7 @@
       const normalScore = Number(item.normalScore || 0);
 
       resultTitle.textContent = humanFinding(finding);
-      resultTime.textContent = "KI-Analyse – " + formatTimestamp(item.timestamp);
+      resultTime.textContent = "KI-Analyse – " + formatTimestamp(item.updatedAt || item.createdAt || item.timestamp);
 
       setupRisk(risk);
 
@@ -1183,7 +1208,7 @@
       metaFile.textContent = item.originalFile || selectedFile.name;
       metaSize.textContent = formatBytes(item.originalSize || selectedFile.size);
       metaModel.textContent = item.hfModelId || "Zakia / Pneumonia FastAI";
-      metaTimestamp.textContent = formatTimestamp(item.timestamp);
+      metaTimestamp.textContent = formatTimestamp(item.updatedAt || item.createdAt || item.timestamp);
 
       if (item.disclaimer) {
         disclaimerBox.textContent = item.disclaimer;
