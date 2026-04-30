@@ -35,6 +35,9 @@ HF_API_TIMEOUT_SECONDS = int(os.environ.get("HF_API_TIMEOUT_SECONDS", "20"))
 
 table = dynamodb.Table(TABLE_NAME)
 
+# Cached at module level — reused across warm Lambda invocations.
+_gradio_client = None
+
 ALLOWED_CONTENT_TYPES = {
     "image/jpeg",
     "image/jpg",
@@ -248,9 +251,11 @@ def analyze_with_gradio(local_image_path):
     Calls Hugging Face Gradio Space and returns pneumonia/normal scores.
     """
 
-    client = Client(HF_SPACE_ID)
+    global _gradio_client
+    if _gradio_client is None:
+        _gradio_client = Client(HF_SPACE_ID)
 
-    result = client.predict(
+    result = _gradio_client.predict(
         img=handle_file(local_image_path),
         api_name="/predict"
     )
