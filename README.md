@@ -646,7 +646,7 @@ Das Projekt verwendet `pytest` für automatisierte Unit Tests.
 Aktueller Stand:
 
 ```text
-19 passed
+28 passed
 ```
 
 Testausführung:
@@ -1221,7 +1221,7 @@ SAM Validation erfolgreich
 SAM Build erfolgreich
 SAM Deployment manuell erfolgreich
 GitHub Actions CI erfolgreich
-Unit Tests: 19 passed
+Unit Tests: 28 passed
 End-to-End Test erfolgreich
 Kein automatisches GitHub-to-AWS CD eingerichtet
 ```
