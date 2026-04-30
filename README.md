@@ -28,6 +28,7 @@ Der Schwerpunkt liegt auf folgenden Themen:
 - Infrastructure as Code mit AWS SAM
 - Automatische Validierung über GitHub Actions CI
 - Sicherheitsrelevante Eingabevalidierung
+- Robuste Fehlerbehandlung bei externen KI-Modellaufrufen
 
 ---
 
@@ -144,6 +145,20 @@ medical-xray-input-ayman-iac
 ```text
 medical-input/
 medical-processed/
+```
+
+### Lambda Functions
+
+```text
+GenerateUploadUrlFunction
+ProcessingFunction
+GetMedicalResultFunction
+```
+
+Beispiel für den physischen Namen der Processing Lambda:
+
+```text
+medscan-ai-processing
 ```
 
 ### DynamoDB
@@ -302,7 +317,18 @@ Stattdessen erhält er eine zeitlich begrenzte Presigned URL für den Upload ein
 
 Da der medizinische S3 Bucket serverseitig mit AWS KMS verschlüsselt ist, werden Presigned URLs mit AWS Signature Version 4 erzeugt.
 
-Das verhindert Fehler beim Upload in KMS-verschlüsselte Buckets.
+Vor dem Fix wurde eine ältere Signaturform erzeugt, was bei SSE-KMS zu folgendem Fehler führte:
+
+```text
+Requests specifying Server Side Encryption with AWS KMS managed keys require AWS Signature Version 4.
+```
+
+Nach dem Fix enthalten die Upload URLs Parameter wie:
+
+```text
+X-Amz-Algorithm=AWS4-HMAC-SHA256
+X-Amz-Signature=...
+```
 
 ### 7.4 Privater medizinischer Bilddaten-Bucket
 
@@ -359,17 +385,35 @@ Die API gibt stattdessen eine generische Antwort zurück:
 }
 ```
 
-### 7.9 DynamoDB TTL
+### 7.9 Korrekte CloudWatch Logs
+
+Ein Copy-Paste-Fehler im `GetMedicalResult` Handler wurde korrigiert.
+
+Vorher:
+
+```text
+Error generating upload URL
+```
+
+Korrekt:
+
+```text
+Error reading medical result
+```
+
+Dadurch sind Fehler in CloudWatch eindeutig der richtigen Lambda-Funktion zuordenbar.
+
+### 7.10 DynamoDB TTL
 
 DynamoDB-Einträge enthalten ein `expiresAt`-Attribut.  
 Dadurch können alte Metadaten automatisch nach Ablauf der Aufbewahrungsfrist gelöscht werden.
 
-### 7.10 S3 Lifecycle Rule
+### 7.11 S3 Lifecycle Rule
 
 Für den medizinischen S3 Bucket ist eine Lifecycle Rule konfiguriert.  
 Diese löscht alte Bildobjekte automatisch.
 
-### 7.11 Keine echten Patientendaten
+### 7.12 Keine echten Patientendaten
 
 Das Projekt ist ein universitäres und technisches Demonstrationsprojekt.  
 Es dürfen keine echten Patientendaten hochgeladen werden.
@@ -418,7 +462,14 @@ Dadurch entstehen keine endlosen Wiederholungsversuche und fehlerhafte Nachricht
 
 Der SQS Visibility Timeout wurde an die Lambda-Ausführungszeit angepasst.
 
-Die Processing Lambda hat eine längere Laufzeit, deshalb wurde der Visibility Timeout erhöht, um doppelte Verarbeitung während laufender Lambda-Ausführung zu vermeiden.
+Die Processing Lambda hat einen Timeout von 90 Sekunden.  
+Der Visibility Timeout der SQS Queue wurde auf 540 Sekunden gesetzt.
+
+```text
+90 seconds × 6 = 540 seconds
+```
+
+Dadurch wird verhindert, dass dieselbe Nachricht während einer laufenden Lambda-Ausführung zu früh erneut verarbeitet wird.
 
 ### 9.4 Idempotency
 
@@ -455,6 +506,12 @@ Dadurch wartet die Lambda-Funktion nicht unbegrenzt auf einen externen Dienst.
 
 Der Gradio Client wird als lazy singleton gecacht.  
 Dadurch muss der Client in warmen Lambda-Containern nicht bei jeder Verarbeitung neu erstellt werden.
+
+### 9.8 PNG/RGBA Handling
+
+Bilder mit Modus `RGBA` oder `P` werden nach `RGB` konvertiert.
+
+Dadurch erhält das Hugging Face Modell konsistente Bilddaten und das Risiko von Modellfehlern bei PNG-Dateien mit Transparenz wird reduziert.
 
 ---
 
@@ -644,6 +701,12 @@ Testausführung:
 python -m pytest -q
 ```
 
+Testliste anzeigen:
+
+```powershell
+python -m pytest --collect-only -q
+```
+
 Getestete Bereiche:
 
 - Upload-URL-Erzeugung
@@ -655,6 +718,7 @@ Getestete Bereiche:
 - Fehlerbehandlung bei externen Modellaufrufen
 - Processing-Hilfsfunktionen
 - S3/SQS Event-Normalisierung
+- Security Edge Cases wie Path Traversal im Dateinamen
 
 Weitere Details befinden sich in:
 
@@ -887,9 +951,169 @@ Invoke-RestMethod `
   -Uri "$API/result?id=$([uri]::EscapeDataString($resultId))"
 ```
 
+### Invalid Filename Test
+
+```powershell
+try {
+  Invoke-WebRequest `
+    -Method POST `
+    -Uri "$API/upload-url" `
+    -ContentType "application/json" `
+    -Body '{"filename":"../../../../etc/test.jpeg","contentType":"image/jpeg"}' `
+    -ErrorAction Stop
+}
+catch {
+  $_.Exception.Response.StatusCode.value__
+  $_.ErrorDetails.Message
+}
+```
+
+Erwartetes Ergebnis:
+
+```text
+400
+{"error": "Invalid filename", "message": "Filename must not contain path separators, '..', or unsafe characters."}
+```
+
 ---
 
-## 24. Warum diese Dienste verwendet wurden
+## 24. Wichtige behobene Fehler
+
+### 24.1 Falsche Logmeldung in GetMedicalResult
+
+Problem:
+
+```text
+Error generating upload URL
+```
+
+Diese Meldung stand fälschlicherweise im `get_result` Handler.
+
+Fix:
+
+```text
+Error reading medical result
+```
+
+Nutzen:
+
+- bessere CloudWatch Logs
+- schnellere Fehlersuche
+- keine Verwechslung mit GenerateUploadUrl Lambda
+
+### 24.2 PNG/RGBA Verarbeitung
+
+Problem:
+
+Bilder mit `RGBA` oder `P` Modus wurden nicht immer in `RGB` konvertiert.
+
+Fix:
+
+```text
+RGBA/P images -> RGB
+```
+
+Nutzen:
+
+- stabilere Bildverarbeitung
+- weniger Modellfehler bei PNG-Dateien
+- konsistentere Eingaben für das KI-Modell
+
+### 24.3 Presigned URL Signature Version
+
+Problem:
+
+Presigned URLs mit alter Signatur funktionierten nicht mit SSE-KMS.
+
+Fix:
+
+```text
+AWS Signature Version 4
+```
+
+Nutzen:
+
+- Uploads in KMS-verschlüsselte Buckets funktionieren korrekt
+
+### 24.4 Unsichere Dateinamen
+
+Problem:
+
+Ein Dateiname wie:
+
+```text
+../../../../etc/test.jpeg
+```
+
+konnte zu ungewöhnlichen S3 Object Keys führen.
+
+Fix:
+
+```text
+Filename Sanitization
+```
+
+Nutzen:
+
+- saubere Object Keys
+- weniger Missbrauchspotenzial
+- bessere Eingabevalidierung
+
+### 24.5 Gradio/Hugging Face Timeout
+
+Problem:
+
+Ein externer Modellaufruf könnte hängen.
+
+Fix:
+
+```text
+Timeout Wrapper
+```
+
+Nutzen:
+
+- Lambda hängt nicht unbegrenzt
+- Fehlerfälle werden kontrolliert behandelt
+
+### 24.6 Gradio Client wird gecacht
+
+Problem:
+
+Der Gradio Client wurde bei jedem Bild neu erstellt.
+
+Fix:
+
+```text
+Lazy Singleton Cache
+```
+
+Nutzen:
+
+- bessere Performance in warmen Lambda-Containern
+- weniger unnötige Initialisierung
+
+### 24.7 Processing Result Handling
+
+Problem:
+
+Nach einem erfolgreichen Gradio-Aufruf wurde versehentlich eine Error-Variable verwendet.
+
+Fix:
+
+```text
+Success path uses real model result
+Failure path uses safe fallback result
+```
+
+Nutzen:
+
+- erfolgreiche Modellantworten werden korrekt als `COMPLETED` gespeichert
+- Fehlerfälle werden sauber als `MODEL_ERROR` behandelt
+
+---
+
+## 25. Warum diese Dienste verwendet wurden
 
 ### Warum Amazon S3?
 
@@ -927,7 +1151,7 @@ GitHub Actions überprüft automatisch, ob das SAM Template valide ist, das Proj
 
 ---
 
-## 25. Warum bestimmte Dienste nicht verwendet wurden
+## 26. Warum bestimmte Dienste nicht verwendet wurden
 
 ### Warum nicht EC2?
 
@@ -963,7 +1187,7 @@ Eine VPC würde die Architektur komplexer machen, ohne für diesen Use Case eine
 
 ---
 
-## 26. Einschränkungen
+## 27. Einschränkungen
 
 Dieses Projekt ist ein Prototyp und hat folgende Einschränkungen:
 
@@ -979,7 +1203,7 @@ Dieses Projekt ist ein Prototyp und hat folgende Einschränkungen:
 
 ---
 
-## 27. Mögliche Weiterentwicklungen
+## 28. Mögliche Weiterentwicklungen
 
 Mögliche Verbesserungen für eine produktionsnähere Version:
 
@@ -999,7 +1223,7 @@ Mögliche Verbesserungen für eine produktionsnähere Version:
 
 ---
 
-## 28. Medizinischer Hinweis
+## 29. Medizinischer Hinweis
 
 Dieses Projekt dient ausschließlich Bildungs- und Demonstrationszwecken.
 
@@ -1008,7 +1232,7 @@ Alle Ergebnisse müssen von qualifiziertem medizinischem Fachpersonal überprüf
 
 ---
 
-## 29. Projektstatus
+## 30. Projektstatus
 
 Aktueller Stand:
 
@@ -1032,6 +1256,7 @@ Idempotency implementiert
 Filename Sanitization implementiert
 Result ID Validation implementiert
 Gradio Timeout implementiert
+Gradio Client Lazy Singleton implementiert
 PNG/RGBA Handling implementiert
 Infrastructure as Code implementiert
 SAM Validation erfolgreich
@@ -1044,7 +1269,7 @@ End-to-End Test erfolgreich
 
 ---
 
-## 30. Autor
+## 31. Autor
 
 ```text
 Ayman Meseleklayame
