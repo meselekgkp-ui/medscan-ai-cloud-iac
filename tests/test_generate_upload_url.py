@@ -61,3 +61,20 @@ def test_generate_upload_url_rejects_unsupported_content_type(monkeypatch):
 
     assert result["statusCode"] == 400
     assert body["error"] == "Unsupported file type"
+
+
+def test_generate_upload_url_rejects_path_traversal_filename(monkeypatch):
+    app = load_module(monkeypatch)
+
+    event = {
+        "body": json.dumps({
+            "filename": "../../../../etc/test.jpeg",
+            "contentType": "image/jpeg"
+        })
+    }
+
+    result = app.lambda_handler(event, None)
+    body = json.loads(result["body"])
+
+    assert result["statusCode"] == 400
+    assert body["error"] == "Invalid filename"
