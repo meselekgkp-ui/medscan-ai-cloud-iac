@@ -2,10 +2,11 @@
 
 [![MedScan AI CI](https://github.com/meselekgkp-ui/medscan-ai-cloud-iac/actions/workflows/ci.yml/badge.svg)](https://github.com/meselekgkp-ui/medscan-ai-cloud-iac/actions/workflows/ci.yml)
 
-MedScan AI ist ein cloud-nativer, serverloser Prototyp zur Analyse von Thorax-Röntgenbildern.  
-Das System ermöglicht den Upload eines Röntgenbildes über eine Weboberfläche, verarbeitet das Bild asynchron, ruft ein externes KI-Modell über Hugging Face Gradio auf, speichert das Ergebnis in DynamoDB und zeigt die Auswertung anschließend im Frontend an.
+MedScan AI ist ein cloud-nativer, serverloser Prototyp zur Analyse von Thorax-Röntgenbildern auf AWS.
 
-> Dieses Projekt ist ein technischer Cloud-Computing-Prototyp. Es ist kein medizinisches Diagnosesystem und ersetzt keine ärztliche oder fachmedizinische Beurteilung.
+Das System ermöglicht den Upload eines Röntgenbildes über eine Weboberfläche, verarbeitet das Bild asynchron, ruft ein externes KI-Modell über Hugging Face Gradio auf, speichert das Ergebnis in DynamoDB und stellt die Auswertung anschließend über eine API bereit.
+
+> Dieses Projekt ist ein technischer Cloud-Computing-Prototyp. Es ist kein Medizinprodukt, kein Diagnosesystem und ersetzt keine ärztliche oder fachmedizinische Beurteilung.
 
 ---
 
@@ -22,9 +23,11 @@ Der Schwerpunkt liegt auf folgenden Themen:
 - Fehlerisolation durch eine Dead-Letter Queue
 - Speicherung von Metadaten und KI-Ergebnissen in Amazon DynamoDB
 - Automatische Datenlöschung durch DynamoDB TTL und S3 Lifecycle Rules
+- Verschlüsselung ruhender Daten mit S3 Server-Side Encryption und AWS KMS
 - Monitoring mit Amazon CloudWatch
 - Infrastructure as Code mit AWS SAM
 - Automatische Validierung über GitHub Actions CI
+- Sicherheitsrelevante Eingabevalidierung
 
 ---
 
@@ -48,7 +51,7 @@ Lambda: GenerateUploadUrl
 Presigned S3 Upload URL
       |
       v
-S3 Medical Input Bucket: medical-input/
+S3 Medical Image Bucket: medical-input/
       |
       v
 S3 ObjectCreated Event
@@ -73,7 +76,7 @@ API Gateway: GET /result
 Lambda: GetMedicalResult
       |
       v
-Frontend zeigt das Ergebnis an
+Frontend / API Client zeigt das Ergebnis an
 ```
 
 ---
@@ -89,16 +92,16 @@ Frontend zeigt das Ergebnis an
 | SQS Dead-Letter Queue | Speicherung fehlgeschlagener Nachrichten nach mehreren Verarbeitungsversuchen |
 | Amazon DynamoDB | Speicherung von Metadaten, Statusinformationen und KI-Ergebnissen |
 | DynamoDB TTL | Automatische Löschung alter Metadaten |
-| S3 Server-Side Encryption | Schutz gespeicherter Bilddaten |
+| S3 Server-Side Encryption / AWS KMS | Schutz ruhender Bilddaten |
 | Amazon CloudWatch | Logs, Metriken, Dashboard und Alarme |
 | AWS SAM | Beschreibung der Infrastruktur als Code |
-| GitHub Actions | Automatische Validierung und Build-Prüfung des Projekts |
+| GitHub Actions | Automatische Validierung, Build-Prüfung und Unit Tests |
 
 ---
 
-## 4. Aktuelle Demo-Ressourcen
+## 4. Aktuelle Deployment-Ressourcen
 
-Die aktuelle Demo-Umgebung verwendet folgende Ressourcen.
+Die aktuelle AWS-SAM-Deployment-Umgebung verwendet folgende Ressourcen.
 
 ### Region
 
@@ -107,14 +110,33 @@ us-east-1
 US East (N. Virginia)
 ```
 
+### CloudFormation Stack
+
+```text
+medscan-ai-iac
+```
+
+### API Gateway
+
+```text
+https://3rhly6kvse.execute-api.us-east-1.amazonaws.com/prod
+```
+
+Routen:
+
+```text
+POST /upload-url
+GET /result
+```
+
 ### S3 Buckets
 
 ```text
 Frontend Bucket:
-medical-xray-web-ayman
+medical-xray-web-ayman-iac
 
 Medical Image Bucket:
-medical-xray-input-ayman
+medical-xray-input-ayman-iac
 ```
 
 ### S3 Prefixes
@@ -124,30 +146,11 @@ medical-input/
 medical-processed/
 ```
 
-### API Gateway
-
-```text
-API Name:
-Pneumo-API
-
-Routen:
-POST /upload-url
-GET /result
-```
-
-### Lambda Functions
-
-```text
-GenerateUploadUrl
-Med-test
-GetMedicalResult
-```
-
 ### DynamoDB
 
 ```text
 Tabelle:
-ImageProcessingMetadata
+ImageProcessingMetadataIac
 
 Partition Key:
 id
@@ -160,20 +163,16 @@ expiresAt
 
 ```text
 Processing Queue:
-medical-xray-processing-queue
+medical-xray-processing-queue-iac
 
 Dead-Letter Queue:
-medical-xray-processing-dlq
+medical-xray-processing-dlq-iac
 ```
 
-### CloudWatch Alarms
+### CloudWatch Dashboard
 
 ```text
-MedScanAI-SQS-Backlog
-MedScanAI-SQS-OldestMessageTooOld
-MedScanAI-DLQ-HasMessages
-MedScanAI-Lambda-Errors
-MedScanAI-Lambda-HighDuration
+MedScanAI-Operations-Dashboard-IaC
 ```
 
 ---
@@ -197,8 +196,11 @@ API Gateway leitet die Anfrage an die Lambda-Funktion `GenerateUploadUrl` weiter
 
 ### Schritt 3: Erstellung einer Presigned URL
 
-Die Lambda-Funktion erstellt eine zeitlich begrenzte Presigned URL für Amazon S3.  
+Die Lambda-Funktion erstellt eine zeitlich begrenzte Presigned URL für Amazon S3.
+
 Dadurch kann der Browser das Bild direkt in den S3 Bucket hochladen, ohne dass das Bild durch API Gateway oder Lambda übertragen werden muss.
+
+Die Presigned URL verwendet AWS Signature Version 4, damit der Upload mit SSE-KMS kompatibel ist.
 
 ### Schritt 4: Upload des Bildes nach S3
 
@@ -207,7 +209,7 @@ Das Bild wird in den Prefix `medical-input/` hochgeladen.
 Beispiel:
 
 ```text
-medical-input/20260429-100927-445e26a5-person1000_bacteria_2931.jpeg
+medical-input/20260430-025040-93451b24-test2.jpeg
 ```
 
 ### Schritt 5: S3 sendet ein Event an SQS
@@ -226,19 +228,20 @@ Die Funktion führt folgende Schritte aus:
 - Validierung von Dateityp und Dateigröße
 - Berechnung eines SHA-256 Hashes
 - Erstellung einer verkleinerten Bildversion
+- Konvertierung problematischer Bildmodi wie `RGBA` oder `P` nach `RGB`
 - Aufruf des Hugging Face Gradio KI-Modells
 - Speicherung des verarbeiteten Bildes in S3
 - Speicherung der Metadaten und KI-Ergebnisse in DynamoDB
 
-### Schritt 7: Ergebnisabfrage durch das Frontend
+### Schritt 7: Ergebnisabfrage
 
-Das Frontend ruft folgenden Endpunkt auf:
+Das Frontend oder ein API-Client ruft folgenden Endpunkt auf:
 
 ```http
 GET /result?id=<S3 object key>
 ```
 
-Die Lambda-Funktion `GetMedicalResult` liest das Ergebnis aus DynamoDB und gibt es an das Frontend zurück.
+Die Lambda-Funktion `GetMedicalResult` liest das Ergebnis aus DynamoDB und gibt es zurück.
 
 ---
 
@@ -265,16 +268,13 @@ Die Processing Lambda wandelt diese Werte in eine einfache Risikoklassifikation 
 | >= 0.40 und < 0.70 | Mittleres Risiko / menschliche Überprüfung erforderlich |
 | < 0.40 | Niedriges Risiko |
 
-Beispiel eines gespeicherten Ergebnisses:
+Beispiel eines finalen Ergebnisses:
 
-```json
-{
-  "medicalFinding": "PNEUMONIA_SUSPECTED",
-  "riskLevel": "HIGH",
-  "pneumoniaScore": 0.9996,
-  "normalScore": 0.0003,
-  "status": "NEEDS_URGENT_HUMAN_REVIEW"
-}
+```text
+status: COMPLETED
+medicalFinding: NO_PNEUMONIA_SUSPECTED
+riskLevel: LOW
+topLabel: NORMAL
 ```
 
 ---
@@ -286,8 +286,8 @@ Beispiel eines gespeicherten Ergebnisses:
 Das Projekt trennt den Frontend Bucket vom medizinischen Bilddaten-Bucket.
 
 ```text
-medical-xray-web-ayman
-medical-xray-input-ayman
+medical-xray-web-ayman-iac
+medical-xray-input-ayman-iac
 ```
 
 Der Frontend Bucket enthält nur statische Webdateien.  
@@ -298,27 +298,78 @@ Der medizinische Bucket enthält hochgeladene und verarbeitete Röntgenbilder.
 Der Browser erhält keine dauerhaften AWS-Zugangsdaten.  
 Stattdessen erhält er eine zeitlich begrenzte Presigned URL für den Upload eines bestimmten Objekts nach S3.
 
-### 7.3 Privater medizinischer Bilddaten-Bucket
+### 7.3 AWS Signature Version 4
+
+Da der medizinische S3 Bucket serverseitig mit AWS KMS verschlüsselt ist, werden Presigned URLs mit AWS Signature Version 4 erzeugt.
+
+Das verhindert Fehler beim Upload in KMS-verschlüsselte Buckets.
+
+### 7.4 Privater medizinischer Bilddaten-Bucket
 
 Der medizinische Bilddaten-Bucket wird nicht als öffentliche Website verwendet.  
 Der Zugriff erfolgt über Presigned URLs und über Lambda-Funktionen.
 
-### 7.4 Verschlüsselung ruhender Daten
+### 7.5 Verschlüsselung ruhender Daten
 
-Der medizinische S3 Bucket verwendet serverseitige Verschlüsselung.  
+Der medizinische S3 Bucket verwendet serverseitige Verschlüsselung mit AWS KMS.
+
 Dadurch werden gespeicherte Bilddaten geschützt.
 
-### 7.5 DynamoDB TTL
+### 7.6 Dateinamen-Sanitization
+
+Upload-Dateinamen werden validiert und bereinigt.
+
+Gefährliche Dateinamen wie:
+
+```text
+../../../../etc/test.jpeg
+```
+
+werden mit HTTP 400 abgelehnt.
+
+Erwartete Antwort:
+
+```json
+{
+  "error": "Invalid filename",
+  "message": "Filename must not contain path separators, '..', or unsafe characters."
+}
+```
+
+Dadurch werden ungewöhnliche oder gefährliche S3 Object Keys verhindert.
+
+### 7.7 Result-ID-Validierung
+
+Die Result API akzeptiert nur gültige IDs unter:
+
+```text
+medical-input/
+```
+
+Ungültige IDs, falsche Prefixes oder zu lange IDs werden abgelehnt.
+
+### 7.8 Keine internen Fehlermeldungen in API Responses
+
+Interne Exceptions werden nur in CloudWatch Logs geschrieben.  
+Die API gibt stattdessen eine generische Antwort zurück:
+
+```json
+{
+  "error": "Internal server error"
+}
+```
+
+### 7.9 DynamoDB TTL
 
 DynamoDB-Einträge enthalten ein `expiresAt`-Attribut.  
 Dadurch können alte Metadaten automatisch nach Ablauf der Aufbewahrungsfrist gelöscht werden.
 
-### 7.6 S3 Lifecycle Rule
+### 7.10 S3 Lifecycle Rule
 
 Für den medizinischen S3 Bucket ist eine Lifecycle Rule konfiguriert.  
 Diese löscht alte Bildobjekte automatisch.
 
-### 7.7 Keine echten Patientendaten
+### 7.11 Keine echten Patientendaten
 
 Das Projekt ist ein universitäres und technisches Demonstrationsprojekt.  
 Es dürfen keine echten Patientendaten hochgeladen werden.
@@ -359,10 +410,17 @@ Dadurch wird die Architektur robuster, weil Upload und Verarbeitung nicht direkt
 
 ### 9.2 Dead-Letter Queue
 
-Wenn eine Nachricht mehrfach nicht verarbeitet werden kann, wird sie in eine Dead-Letter Queue verschoben.  
+Wenn eine Nachricht mehrfach nicht verarbeitet werden kann, wird sie in eine Dead-Letter Queue verschoben.
+
 Dadurch entstehen keine endlosen Wiederholungsversuche und fehlerhafte Nachrichten können gezielt untersucht werden.
 
-### 9.3 Idempotency
+### 9.3 SQS Visibility Timeout
+
+Der SQS Visibility Timeout wurde an die Lambda-Ausführungszeit angepasst.
+
+Die Processing Lambda hat eine längere Laufzeit, deshalb wurde der Visibility Timeout erhöht, um doppelte Verarbeitung während laufender Lambda-Ausführung zu vermeiden.
+
+### 9.4 Idempotency
 
 S3 Events können mehrfach zugestellt werden.  
 Deshalb verwendet die Processing Lambda den S3 Object Key als DynamoDB `id`.
@@ -377,7 +435,7 @@ Wenn dasselbe Event erneut eintrifft, erkennt die Funktion, dass das Bild bereit
 
 Dadurch werden doppelte Verarbeitung und doppelte Ergebnisdatensätze vermieden.
 
-### 9.4 Fehlerstatus
+### 9.5 Fehlerstatus
 
 Wenn die Verarbeitung fehlschlägt, aktualisiert die Lambda-Funktion DynamoDB mit:
 
@@ -386,6 +444,17 @@ status = PROCESSING_FAILED
 ```
 
 Danach wird der Fehler erneut ausgelöst, damit SQS die Nachricht wiederholen oder später in die DLQ verschieben kann.
+
+### 9.6 Externer Modellaufruf mit Timeout
+
+Der externe Hugging Face / Gradio Modellaufruf wird über einen Timeout-Wrapper abgesichert.
+
+Dadurch wartet die Lambda-Funktion nicht unbegrenzt auf einen externen Dienst.
+
+### 9.7 Gradio Client Lazy Singleton
+
+Der Gradio Client wird als lazy singleton gecacht.  
+Dadurch muss der Client in warmen Lambda-Containern nicht bei jeder Verarbeitung neu erstellt werden.
 
 ---
 
@@ -440,23 +509,23 @@ Fehlerfälle
 
 | Alarm | Bedeutung |
 |---|---|
-| MedScanAI-SQS-Backlog | Es befinden sich sichtbare Nachrichten in der Processing Queue |
-| MedScanAI-SQS-OldestMessageTooOld | Eine Nachricht wartet zu lange in der Queue |
-| MedScanAI-DLQ-HasMessages | Es befinden sich fehlgeschlagene Nachrichten in der Dead-Letter Queue |
-| MedScanAI-Lambda-Errors | Die Processing Lambda erzeugt Fehler |
-| MedScanAI-Lambda-HighDuration | Die Processing Lambda benötigt ungewöhnlich lange |
+| SQS Backlog Alarm | Es befinden sich sichtbare Nachrichten in der Processing Queue |
+| SQS Oldest Message Alarm | Eine Nachricht wartet zu lange in der Queue |
+| DLQ Alarm | Es befinden sich fehlgeschlagene Nachrichten in der Dead-Letter Queue |
+| Lambda Errors Alarm | Die Processing Lambda erzeugt Fehler |
+| Lambda High Duration Alarm | Die Processing Lambda benötigt ungewöhnlich lange |
 
 ---
 
 ## 12. Operational Failure Test
 
-Zur Überprüfung des Monitorings wurde der SQS Trigger der Processing Lambda temporär deaktiviert.
+Zur Überprüfung des Monitorings kann der SQS Trigger der Processing Lambda temporär deaktiviert werden.
 
 ### Testszenario
 
 ```text
 SQS Trigger deaktiviert
-Bild über Frontend hochgeladen
+Bild über Frontend/API hochgeladen
 S3 sendet Event an SQS
 Lambda verarbeitet die Nachricht nicht
 Nachricht bleibt sichtbar in SQS
@@ -466,7 +535,7 @@ CloudWatch Alarm wechselt in den ALARM-Zustand
 ### Erwartetes Ergebnis
 
 ```text
-MedScanAI-SQS-Backlog = ALARM
+SQS Backlog Alarm = ALARM
 ```
 
 ### Wiederherstellung
@@ -484,7 +553,7 @@ Es erkennt ein reales Betriebsproblem in der asynchronen Verarbeitungskette.
 
 ## 13. Infrastructure as Code
 
-Die Infrastruktur ist zusätzlich als AWS SAM Template beschrieben.
+Die Infrastruktur ist als AWS SAM Template beschrieben.
 
 ```text
 template.yaml
@@ -506,23 +575,29 @@ Das SAM Template definiert:
 - CloudWatch Alarms
 - CloudWatch Dashboard
 
-Die IaC-Version verwendet Ressourcennamen mit `-iac`, damit die bestehende funktionierende Demo-Umgebung nicht ersetzt wird.
+Der aktuelle Stack wurde erfolgreich in AWS deployed:
+
+```text
+medscan-ai-iac
+```
 
 ---
 
 ## 14. Projektstruktur
 
 ```text
-medscan-ai-iac/
+medscan-ai-cloud-iac/
 │   .gitignore
 │   README.md
+│   requirements-dev.txt
 │   template.yaml
 │
 ├── docs/
 │   ├── api-contract.md
 │   ├── threat-model.md
 │   ├── current-resources.md
-│   └── iac-validation.md
+│   ├── iac-validation.md
+│   └── testing.md
 │
 ├── diagrams/
 │
@@ -531,6 +606,13 @@ medscan-ai-iac/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml
+│
+├── tests/
+│   ├── conftest.py
+│   ├── test_generate_upload_url.py
+│   ├── test_get_result.py
+│   ├── test_gradio_failure.py
+│   └── test_processing_helpers.py
 │
 └── src/
     ├── generate_upload_url/
@@ -546,27 +628,75 @@ medscan-ai-iac/
 
 ---
 
-## Projektstatus
+## 15. Testing
 
-- Basic Unit Tests implementiert
-- pytest: 8 Tests erfolgreich
+Das Projekt verwendet `pytest` für automatisierte Unit Tests.
+
+Aktueller Stand:
+
+```text
+19 passed
+```
+
+Testausführung:
+
+```powershell
+python -m pytest -q
+```
+
+Getestete Bereiche:
+
+- Upload-URL-Erzeugung
+- Dateitypvalidierung
+- Dateinamen-Sanitization
+- Result-API-Validierung
+- DynamoDB-Result-Handling
+- Gradio/Hugging-Face-Timeouts
+- Fehlerbehandlung bei externen Modellaufrufen
+- Processing-Hilfsfunktionen
+- S3/SQS Event-Normalisierung
+
+Weitere Details befinden sich in:
+
+```text
+docs/testing.md
+```
 
 ---
 
-## 15. Dokumentation
+## 16. Finales End-to-End-Testergebnis
 
-Weitere technische Dokumentation befindet sich im Ordner `docs/`.
+Die deployte AWS-Pipeline wurde erfolgreich manuell getestet.
 
-| Dokument | Beschreibung |
-|---|---|
-| [API Contract](docs/api-contract.md) | Beschreibt die HTTP-Endpunkte, Requests, Responses, Statuswerte und Fehlerfälle |
-| [Threat Model](docs/threat-model.md) | Dokumentiert zentrale Sicherheitsrisiken und Gegenmaßnahmen |
-| [Current Resources](docs/current-resources.md) | Listet die aktuell verwendeten AWS-Ressourcen der Demo-Umgebung |
-| [IaC Validation](docs/iac-validation.md) | Dokumentiert die lokale Validierung und den SAM Build |
-| [Testing](docs/testing.md) | Beschreibt Unit Tests, lokale Testausführung und GitHub Actions Integration |
+Getesteter Ablauf:
+
+```text
+API Gateway
+→ GenerateUploadUrl Lambda
+→ S3 Presigned URL
+→ encrypted S3 upload
+→ SQS
+→ Processing Lambda
+→ Hugging Face / Gradio model
+→ processed image in S3
+→ DynamoDB
+→ GetMedicalResult API
+```
+
+Finales Ergebnis:
+
+```text
+status: COMPLETED
+medicalFinding: NO_PNEUMONIA_SUSPECTED
+riskLevel: LOW
+topLabel: NORMAL
+```
+
+Damit wurde bestätigt, dass der vollständige Serverless-Workflow erfolgreich funktioniert.
+
 ---
 
-## 16. Continuous Integration
+## 17. Continuous Integration
 
 Das Repository verwendet GitHub Actions für eine einfache CI-Prüfung.
 
@@ -589,7 +719,7 @@ Dadurch wird sichergestellt, dass das SAM-Projekt weiterhin validierbar und baub
 
 ---
 
-## 17. Lokale Voraussetzungen
+## 18. Lokale Voraussetzungen
 
 Die lokale Entwicklungsumgebung verwendet:
 
@@ -598,6 +728,7 @@ Windows
 PowerShell
 Python 3.11
 AWS SAM CLI
+Git
 ```
 
 SAM CLI prüfen:
@@ -606,7 +737,7 @@ SAM CLI prüfen:
 sam --version
 ```
 
-Region setzen:
+AWS Region setzen:
 
 ```powershell
 $env:AWS_DEFAULT_REGION="us-east-1"
@@ -621,7 +752,23 @@ $env:SAM_CLI_TELEMETRY="0"
 
 ---
 
-## 18. SAM Template validieren
+## 19. Entwicklungsabhängigkeiten installieren
+
+Für lokale Tests:
+
+```powershell
+python -m pip install -r requirements-dev.txt
+```
+
+Für die Processing Lambda liegen die Runtime-Abhängigkeiten zusätzlich in:
+
+```text
+src/processing/requirements.txt
+```
+
+---
+
+## 20. SAM Template validieren
 
 Befehl:
 
@@ -637,7 +784,7 @@ template.yaml is a valid SAM Template
 
 ---
 
-## 19. SAM Projekt bauen
+## 21. SAM Projekt bauen
 
 Befehl:
 
@@ -656,22 +803,93 @@ Built Template   : .aws-sam\build\template.yaml
 
 ---
 
-## 20. Deployment-Hinweis
+## 22. Deployment
 
-Das SAM Template wurde erfolgreich validiert und lokal gebaut.
+Das Projekt wurde erfolgreich mit AWS SAM deployed.
 
-Ein automatisches Deployment wurde nicht ausgeführt, da das AWS Academy Learner Lab bestimmte IAM- und CloudFormation-Berechtigungen einschränken kann.  
-Die bestehende funktionierende Demo-Umgebung wurde deshalb nicht ersetzt.
+Standardbefehl nach der ersten Konfiguration:
 
-In einem vollständigen AWS Account könnte das Projekt mit folgendem Befehl deployed werden:
+```powershell
+sam deploy
+```
+
+Erwartetes Ergebnis bei unverändertem Stack:
+
+```text
+No changes to deploy. Stack medscan-ai-iac is up to date.
+```
+
+Falls das Projekt neu deployed werden soll:
 
 ```powershell
 sam deploy --guided --region us-east-1
 ```
 
+Wichtige Parameter:
+
+```text
+Stack Name: medscan-ai-iac
+Region: us-east-1
+ExistingLambdaRoleArn: arn:aws:iam::<account-id>:role/LabRole
+```
+
+Hinweis: In AWS Academy Learner Lab können bestimmte IAM- und CloudFormation-Berechtigungen eingeschränkt sein. Das Projekt verwendet deshalb einen vorhandenen LabRole-ARN.
+
 ---
 
-## 21. Warum diese Dienste verwendet wurden
+## 23. Nützliche lokale Befehle
+
+### Tests ausführen
+
+```powershell
+python -m pytest -q
+```
+
+### Testliste anzeigen
+
+```powershell
+python -m pytest --collect-only -q
+```
+
+### AWS Identität prüfen
+
+```powershell
+aws sts get-caller-identity
+```
+
+### Stack Outputs anzeigen
+
+```powershell
+aws cloudformation describe-stacks `
+  --stack-name medscan-ai-iac `
+  --region us-east-1 `
+  --query "Stacks[0].Outputs" `
+  --output table
+```
+
+### S3 Inhalte prüfen
+
+```powershell
+aws s3 ls s3://medical-xray-input-ayman-iac --recursive --region us-east-1
+```
+
+### Processing Lambda Logs lesen
+
+```powershell
+aws logs tail "/aws/lambda/medscan-ai-processing" --since 10m --region us-east-1
+```
+
+### Result API testen
+
+```powershell
+Invoke-RestMethod `
+  -Method GET `
+  -Uri "$API/result?id=$([uri]::EscapeDataString($resultId))"
+```
+
+---
+
+## 24. Warum diese Dienste verwendet wurden
 
 ### Warum Amazon S3?
 
@@ -705,11 +923,11 @@ SAM macht die Serverless-Architektur reproduzierbar, versionierbar und dokumenti
 
 ### Warum GitHub Actions?
 
-GitHub Actions überprüft automatisch, ob das SAM Template valide ist, das Projekt gebaut werden kann und keine offensichtlichen Python-Syntaxfehler vorhanden sind.
+GitHub Actions überprüft automatisch, ob das SAM Template valide ist, das Projekt gebaut werden kann und die automatisierten Tests erfolgreich sind.
 
 ---
 
-## 22. Warum bestimmte Dienste nicht verwendet wurden
+## 25. Warum bestimmte Dienste nicht verwendet wurden
 
 ### Warum nicht EC2?
 
@@ -730,8 +948,7 @@ SQS ergänzt jedoch Pufferung, Wiederholungslogik und Fehlerisolation.
 ### Warum kein CloudFront in der aktuellen Demo?
 
 CloudFront wäre für eine Produktionsumgebung sinnvoll, da es HTTPS und Edge Caching unterstützt.  
-Im AWS Academy Learner Lab war die Erstellung von CloudFront durch IAM-Berechtigungen eingeschränkt.  
-Deshalb verwendet die aktuelle Demo den S3 Static Website Endpoint.
+In der aktuellen AWS Academy Umgebung wurde die einfache S3 Static Website Variante verwendet.
 
 Mögliche Production-Verbesserung:
 
@@ -746,7 +963,7 @@ Eine VPC würde die Architektur komplexer machen, ohne für diesen Use Case eine
 
 ---
 
-## 23. Einschränkungen
+## 26. Einschränkungen
 
 Dieses Projekt ist ein Prototyp und hat folgende Einschränkungen:
 
@@ -756,29 +973,33 @@ Dieses Projekt ist ein Prototyp und hat folgende Einschränkungen:
 - Der S3 Website Endpoint verwendet in der aktuellen Demo HTTP.
 - Es gibt noch keine Benutzeranmeldung.
 - Es dürfen keine echten Patientendaten hochgeladen werden.
-- Das Deployment wurde wegen möglicher AWS-Academy-Berechtigungsgrenzen nicht über SAM ausgeführt.
-- Die GitHub Actions CI validiert und baut das Projekt, führt aber kein AWS Deployment aus.
+- Die GitHub Actions CI validiert, baut und testet das Projekt, führt aber kein AWS Deployment aus.
+- Die API-Endpunkte sind für den Prototyp öffentlich erreichbar.
+- Für eine produktionsnahe Version wären Authentifizierung, Autorisierung und Rate Limiting notwendig.
 
 ---
 
-## 24. Mögliche Weiterentwicklungen
+## 27. Mögliche Weiterentwicklungen
 
 Mögliche Verbesserungen für eine produktionsnähere Version:
 
 - Amazon CloudFront mit HTTPS
 - Amazon Cognito für Benutzeranmeldung
 - Benutzerbezogene Ergebniszugriffe
+- API Gateway Authorizer
+- Rate Limiting / Usage Plans / AWS WAF
 - Eigene Domain mit ACM-Zertifikat
 - Hosting des KI-Modells innerhalb von AWS, zum Beispiel mit Amazon SageMaker
-- Strukturierte Logs mit Correlation IDs
-- Automatisierte Tests
+- Strukturierte JSON Logs mit Correlation IDs
+- Vollautomatisierte Integration Tests
 - CI/CD Deployment Pipeline mit GitHub Actions
 - Stärkere IAM Least-Privilege-Rollen
 - Modellbewertung mit Accuracy, False Positives und False Negatives
+- CloudWatch Synthetics Canary für API-Verfügbarkeit
 
 ---
 
-## 25. Medizinischer Hinweis
+## 28. Medizinischer Hinweis
 
 Dieses Projekt dient ausschließlich Bildungs- und Demonstrationszwecken.
 
@@ -787,33 +1008,43 @@ Alle Ergebnisse müssen von qualifiziertem medizinischem Fachpersonal überprüf
 
 ---
 
-## 26. Projektstatus
+## 29. Projektstatus
 
 Aktueller Stand:
 
 ```text
-Funktionierende Demo implementiert
+Funktionierende Serverless-Pipeline implementiert
 S3 Frontend funktioniert
 API Gateway Routen funktionieren
-Lambda Processing funktioniert
+Presigned Upload mit Signature V4 funktioniert
+S3 SSE-KMS Upload funktioniert
 SQS Processing Queue funktioniert
+Processing Lambda funktioniert
+Hugging Face / Gradio Modellaufruf funktioniert
+Processed Image Speicherung funktioniert
 DynamoDB Ergebnispeicherung funktioniert
+GetMedicalResult API funktioniert
 DynamoDB TTL implementiert
 S3 Lifecycle Rule implementiert
 CloudWatch Dashboard implementiert
 CloudWatch Alarms implementiert
 Idempotency implementiert
-Infrastructure as Code vorbereitet
+Filename Sanitization implementiert
+Result ID Validation implementiert
+Gradio Timeout implementiert
+PNG/RGBA Handling implementiert
+Infrastructure as Code implementiert
 SAM Validation erfolgreich
 SAM Build erfolgreich
+SAM Deployment erfolgreich
 GitHub Actions CI erfolgreich
-API Contract dokumentiert
-Threat Model dokumentiert
+Unit Tests: 19 passed
+End-to-End Test erfolgreich
 ```
 
 ---
 
-## 27. Autor
+## 30. Autor
 
 ```text
 Ayman Meseleklayame
