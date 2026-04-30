@@ -147,7 +147,7 @@ def lambda_handler(event, context):
         })
 
     except Exception as e:
-        print("Error generating upload URL:", str(e))
+        print("Error reading medical result:", str(e))
         return response(500, {
             "error": "Internal server error"
-    })
+        })

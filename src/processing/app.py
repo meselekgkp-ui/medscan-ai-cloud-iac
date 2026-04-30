@@ -536,7 +536,7 @@ def lambda_handler(event, context):
 
         buffer = io.BytesIO()
 
-        if image_format.upper() in ["JPEG", "JPG"] and img_copy.mode in ["RGBA", "P"]:
+        if img_copy.mode in ["RGBA", "P"]:
             img_copy = img_copy.convert("RGB")
 
         img_copy.save(buffer, format=image_format, optimize=True, quality=85)
