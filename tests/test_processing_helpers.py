@@ -2,6 +2,8 @@ import json
 import importlib.util
 from decimal import Decimal
 from pathlib import Path
+import io
+from PIL import Image
 
 
 def load_module():
@@ -97,3 +99,82 @@ def test_get_s3_record_ignores_s3_test_event_from_sqs():
     }
 
     assert app.get_s3_record_from_event(event) is None
+
+
+def make_gradio_result(pneumonia_score, normal_score):
+    return {
+        "label": "PNEUMONIA" if pneumonia_score > normal_score else "NORMAL",
+        "confidences": [
+            {"label": "PNEUMONIA", "confidence": pneumonia_score},
+            {"label": "NORMAL", "confidence": normal_score}
+        ]
+    }
+
+
+def test_analyze_with_gradio_classifies_high_risk(monkeypatch):
+    app = load_module()
+
+    class FakeClient:
+        def __init__(self, space_id): pass
+        def predict(self, img, api_name):
+            return make_gradio_result(0.95, 0.05)
+
+    monkeypatch.setattr(app, "Client", FakeClient)
+    monkeypatch.setattr(app, "handle_file", lambda x: x)
+
+    result = app.analyze_with_gradio("fake.jpeg")
+
+    assert result["status"] == "NEEDS_URGENT_HUMAN_REVIEW"
+    assert result["riskLevel"] == "HIGH"
+    assert result["medicalFinding"] == "PNEUMONIA_SUSPECTED"
+    assert float(result["pneumoniaScore"]) == 0.95
+
+
+def test_analyze_with_gradio_classifies_medium_risk(monkeypatch):
+    app = load_module()
+
+    class FakeClient:
+        def __init__(self, space_id): pass
+        def predict(self, img, api_name):
+            return make_gradio_result(0.55, 0.45)
+
+    monkeypatch.setattr(app, "Client", FakeClient)
+    monkeypatch.setattr(app, "handle_file", lambda x: x)
+
+    result = app.analyze_with_gradio("fake.jpeg")
+
+    assert result["status"] == "NEEDS_HUMAN_REVIEW"
+    assert result["riskLevel"] == "MEDIUM"
+    assert result["medicalFinding"] == "PNEUMONIA_UNCLEAR"
+
+
+def test_analyze_with_gradio_classifies_low_risk(monkeypatch):
+    app = load_module()
+
+    class FakeClient:
+        def __init__(self, space_id): pass
+        def predict(self, img, api_name):
+            return make_gradio_result(0.02, 0.98)
+
+    monkeypatch.setattr(app, "Client", FakeClient)
+    monkeypatch.setattr(app, "handle_file", lambda x: x)
+
+    result = app.analyze_with_gradio("fake.jpeg")
+
+    assert result["status"] == "COMPLETED"
+    assert result["riskLevel"] == "LOW"
+    assert result["medicalFinding"] == "NO_PNEUMONIA_SUSPECTED"
+
+
+def test_rgba_png_converts_to_rgb_before_save():
+    img = Image.new("RGBA", (10, 10), (255, 0, 0, 128))
+    img_copy = img.copy()
+
+    if img_copy.mode in ["RGBA", "P"]:
+        img_copy = img_copy.convert("RGB")
+
+    assert img_copy.mode == "RGB"
+
+    buffer = io.BytesIO()
+    img_copy.save(buffer, format="JPEG", quality=85)
+    assert len(buffer.getvalue()) > 0

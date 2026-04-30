@@ -140,3 +140,38 @@ def test_is_valid_result_id_rejects_wrong_prefix(monkeypatch):
     assert app.is_valid_result_id(
         "medical-processed/test.jpeg"
     ) is False
+
+
+def test_is_valid_result_id_rejects_double_dot(monkeypatch):
+    app = load_module(monkeypatch)
+
+    assert app.is_valid_result_id("medical-input/../secret.jpeg") is False
+
+
+def test_is_valid_result_id_rejects_too_long_id(monkeypatch):
+    app = load_module(monkeypatch)
+
+    long_id = "medical-input/" + "a" * 500
+    assert app.is_valid_result_id(long_id) is False
+
+
+def test_get_result_dynamodb_error_returns_500(monkeypatch):
+    app = load_module(monkeypatch)
+
+    class FailingTable:
+        def get_item(self, Key):
+            raise RuntimeError("DynamoDB unavailable")
+
+    monkeypatch.setattr(app, "table", FailingTable())
+
+    event = {
+        "queryStringParameters": {
+            "id": "medical-input/test-image.jpeg"
+        }
+    }
+
+    result = app.lambda_handler(event, None)
+    body = json.loads(result["body"])
+
+    assert result["statusCode"] == 500
+    assert body["error"] == "Internal server error"

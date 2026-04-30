@@ -78,3 +78,41 @@ def test_generate_upload_url_rejects_path_traversal_filename(monkeypatch):
 
     assert result["statusCode"] == 400
     assert body["error"] == "Invalid filename"
+
+
+def test_generate_upload_url_invalid_json_body_returns_400(monkeypatch):
+    app = load_module(monkeypatch)
+
+    event = {
+        "body": "not valid json {"
+    }
+
+    result = app.lambda_handler(event, None)
+    body = json.loads(result["body"])
+
+    assert result["statusCode"] == 400
+    assert body["error"] == "Invalid JSON body"
+
+
+def test_generate_upload_url_missing_bucket_name_returns_500(monkeypatch):
+    monkeypatch.setenv("BUCKET_NAME", "")
+    monkeypatch.setenv("UPLOAD_PREFIX", "medical-input/")
+    monkeypatch.setenv("URL_EXPIRES_SECONDS", "300")
+
+    module_path = Path("src/generate_upload_url/app.py")
+    spec = importlib.util.spec_from_file_location("generate_upload_url_app_no_bucket", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    event = {
+        "body": json.dumps({
+            "filename": "test.jpeg",
+            "contentType": "image/jpeg"
+        })
+    }
+
+    result = module.lambda_handler(event, None)
+    body = json.loads(result["body"])
+
+    assert result["statusCode"] == 500
+    assert "BUCKET_NAME" in body["error"]
