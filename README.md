@@ -30,6 +30,8 @@ Der Schwerpunkt liegt auf:
 - Sicherheitsrelevanter Eingabevalidierung
 - Robuster Fehlerbehandlung bei externen KI-Modellaufrufen
 
+Der wichtigste praktische Gedanke des Projekts ist: Der Benutzer soll ein Bild hochladen können, ohne direkte AWS-Zugangsdaten zu besitzen. Die Verarbeitung läuft danach entkoppelt und fehlertolerant über S3, SQS, Lambda und DynamoDB.
+
 ---
 
 ## 2. Architekturüberblick
@@ -77,6 +79,8 @@ Lambda: GetMedicalResult
       v
 Frontend / API Client zeigt das Ergebnis an
 ```
+
+Die Architektur ist bewusst asynchron aufgebaut. Der Upload wird schnell abgeschlossen, während die eigentliche Bildanalyse im Hintergrund über SQS und Lambda verarbeitet wird.
 
 ---
 
@@ -168,6 +172,8 @@ medical-xray-processing-dlq-iac
 MedScanAI-Operations-Dashboard-IaC
 ```
 
+Hinweis: Da AWS Academy Learner Lab temporäre Credentials und begrenzte Laufzeiten verwendet, können konkrete URLs oder Ressourcen nach Ende einer Lab-Session nicht dauerhaft verfügbar sein. Der Code und die Infrastrukturdefinition bleiben jedoch über GitHub und AWS SAM reproduzierbar.
+
 ---
 
 ## 5. Verarbeitungsablauf
@@ -217,15 +223,19 @@ riskLevel: LOW
 topLabel: NORMAL
 ```
 
+Das Modell wird nur als technischer Bestandteil eines Cloud-Prototyps verwendet. Es ersetzt keine medizinische Diagnose.
+
 ---
 
 ## 7. Sicherheitskonzept
 
-### Presigned URLs
+### 7.1 Presigned URLs
 
 Der Browser erhält keine dauerhaften AWS-Zugangsdaten. Stattdessen wird eine zeitlich begrenzte Presigned URL erzeugt.
 
-### AWS Signature Version 4
+Dadurch kann der Upload direkt nach S3 erfolgen, ohne dass API Gateway oder Lambda große Bilddateien übertragen müssen.
+
+### 7.2 AWS Signature Version 4
 
 Da der medizinische S3 Bucket mit AWS KMS verschlüsselt ist, werden Presigned URLs mit AWS Signature Version 4 erzeugt.
 
@@ -242,7 +252,7 @@ X-Amz-Algorithm=AWS4-HMAC-SHA256
 X-Amz-Signature=...
 ```
 
-### Filename Sanitization
+### 7.3 Filename Sanitization
 
 Gefährliche Dateinamen wie:
 
@@ -261,7 +271,9 @@ Erwartete Antwort:
 }
 ```
 
-### Result-ID-Validierung
+Das ist wichtig, weil S3 zwar kein klassisches Dateisystem mit Directory Traversal ist, aber ungewöhnliche Object Keys trotzdem zu unsauberen und schwer wartbaren Datenflüssen führen können.
+
+### 7.4 Result-ID-Validierung
 
 Die Result API akzeptiert nur gültige IDs unter:
 
@@ -271,7 +283,7 @@ medical-input/
 
 Ungültige IDs, falsche Prefixes oder zu lange IDs werden abgelehnt.
 
-### Keine internen Fehlermeldungen in API Responses
+### 7.5 Keine internen Fehlermeldungen in API Responses
 
 Interne Exceptions werden nur in CloudWatch Logs geschrieben. Die API gibt stattdessen generische Fehlerantworten zurück:
 
@@ -281,14 +293,16 @@ Interne Exceptions werden nur in CloudWatch Logs geschrieben. Die API gibt statt
 }
 ```
 
-### Datenlöschung
+Dadurch werden technische Details nicht unnötig nach außen gegeben.
+
+### 7.6 Datenlöschung
 
 Das Projekt verwendet:
 
 - DynamoDB TTL über das Attribut `expiresAt`
 - S3 Lifecycle Rule zur automatischen Löschung alter Bildobjekte
 
-### Keine echten Patientendaten
+### 7.7 Keine echten Patientendaten
 
 Das Projekt ist ein universitäres und technisches Demonstrationsprojekt. Es dürfen keine echten Patientendaten hochgeladen werden.
 
@@ -308,7 +322,7 @@ Das Projekt ist ein universitäres und technisches Demonstrationsprojekt. Es dü
 
 ## 9. Zuverlässigkeit und Fehlerbehandlung
 
-### SQS-Entkopplung
+### 9.1 SQS-Entkopplung
 
 Die Architektur nutzt:
 
@@ -322,13 +336,15 @@ statt einer direkten Kopplung:
 S3 -> Lambda
 ```
 
-Dadurch wird die Verarbeitung robuster und fehlertoleranter.
+Dadurch wird die Verarbeitung robuster und fehlertoleranter. Wenn die Processing Lambda kurzfristig nicht verfügbar ist, bleiben Nachrichten zunächst in SQS.
 
-### Dead-Letter Queue
+### 9.2 Dead-Letter Queue
 
 Fehlgeschlagene Nachrichten werden nach mehreren Versuchen in eine DLQ verschoben.
 
-### SQS Visibility Timeout
+Das verhindert endlose Wiederholungen und erleichtert die spätere Fehleranalyse.
+
+### 9.3 SQS Visibility Timeout
 
 Die Processing Lambda hat einen Timeout von 90 Sekunden. Der SQS Visibility Timeout wurde auf 540 Sekunden gesetzt.
 
@@ -338,7 +354,7 @@ Die Processing Lambda hat einen Timeout von 90 Sekunden. Der SQS Visibility Time
 
 Dadurch wird verhindert, dass dieselbe Nachricht zu früh erneut verarbeitet wird.
 
-### Idempotency
+### 9.4 Idempotency
 
 Die Processing Lambda verwendet den S3 Object Key als DynamoDB `id`.
 
@@ -350,21 +366,33 @@ PROCESSING
 
 Dadurch werden doppelte S3 Events erkannt und doppelte Verarbeitung wird vermieden.
 
-### Gradio Timeout
+### 9.5 Fehlerstatus
+
+Wenn die Verarbeitung fehlschlägt, wird der DynamoDB-Eintrag mit einem Fehlerstatus aktualisiert:
+
+```text
+PROCESSING_FAILED
+```
+
+Danach wird der Fehler erneut ausgelöst, damit SQS die Nachricht erneut zustellen oder später in die DLQ verschieben kann.
+
+### 9.6 Gradio Timeout
 
 Der externe Hugging Face / Gradio Modellaufruf ist mit einem Timeout-Wrapper abgesichert.
 
-### Gradio Client Lazy Singleton
+Dadurch hängt die Lambda-Funktion nicht unbegrenzt, wenn der externe Dienst langsam oder nicht erreichbar ist.
+
+### 9.7 Gradio Client Lazy Singleton
 
 Der Gradio Client wird als lazy singleton gecacht. Dadurch muss der Client in warmen Lambda-Containern nicht bei jeder Verarbeitung neu erstellt werden.
 
-### PNG/RGBA Handling
+### 9.8 PNG/RGBA Handling
 
 Bilder mit Modus `RGBA` oder `P` werden nach `RGB` konvertiert. Dadurch erhält das Modell konsistente Bilddaten.
 
 ---
 
-## 10. Monitoring
+## 10. Monitoring und Betrieb
 
 Das Projekt enthält ein CloudWatch Dashboard und mehrere Alarme.
 
@@ -394,7 +422,48 @@ Fehlerfälle
 
 ---
 
-## 11. Infrastructure as Code
+## 11. CloudWatch Alarms
+
+| Alarm | Bedeutung |
+|---|---|
+| SQS Backlog Alarm | Es befinden sich sichtbare Nachrichten in der Processing Queue |
+| SQS Oldest Message Alarm | Eine Nachricht wartet zu lange in der Queue |
+| DLQ Alarm | Es befinden sich fehlgeschlagene Nachrichten in der Dead-Letter Queue |
+| Lambda Errors Alarm | Die Processing Lambda erzeugt Fehler |
+| Lambda High Duration Alarm | Die Processing Lambda benötigt ungewöhnlich lange |
+
+---
+
+## 12. Operational Failure Test
+
+Zur Überprüfung des Monitorings kann der SQS Trigger der Processing Lambda temporär deaktiviert werden.
+
+### Testszenario
+
+```text
+SQS Trigger deaktiviert
+Bild über Frontend/API hochgeladen
+S3 sendet Event an SQS
+Lambda verarbeitet die Nachricht nicht
+Nachricht bleibt sichtbar in SQS
+CloudWatch Alarm wechselt in den ALARM-Zustand
+```
+
+### Erwartetes Ergebnis
+
+```text
+SQS Backlog Alarm = ALARM
+```
+
+### Wiederherstellung
+
+Der SQS Trigger wird wieder aktiviert. Lambda verarbeitet die wartende Nachricht. Die Queue wird geleert und der Alarm kehrt in den OK-Zustand zurück.
+
+Der Test zeigt, dass das Monitoring nicht nur dekorativ ist, sondern ein reales Betriebsproblem sichtbar machen kann.
+
+---
+
+## 13. Infrastructure as Code
 
 Die Infrastruktur ist als AWS SAM Template beschrieben:
 
@@ -426,7 +495,7 @@ medscan-ai-iac
 
 ---
 
-## 12. GitHub, CI und Deployment
+## 14. GitHub, CI und Deployment
 
 GitHub dient in diesem Projekt als Source-of-Truth für:
 
@@ -452,7 +521,7 @@ sam build
 sam deploy
 ```
 
-Grund dafür ist die AWS Academy Learner Lab Umgebung. Diese verwendet temporäre Credentials und eingeschränkte IAM-/CloudFormation-Berechtigungen. Dadurch ist eine stabile automatische CD-Pipeline von GitHub nach AWS in diesem Projekt nicht sinnvoll umgesetzt worden.
+Grund dafür ist die AWS Academy Learner Lab Umgebung. Diese verwendet temporäre Credentials und eingeschränkte IAM-/CloudFormation-Berechtigungen. Dadurch wurde keine stabile automatische CD-Pipeline von GitHub nach AWS eingerichtet.
 
 Der Zusammenhang ist daher:
 
@@ -464,7 +533,7 @@ SAM deploy = manuelle Brücke zwischen GitHub-Code und AWS-Umgebung
 
 ---
 
-## 13. Projektstruktur
+## 15. Projektstruktur
 
 ```text
 medscan-ai-cloud-iac/
@@ -479,6 +548,10 @@ medscan-ai-cloud-iac/
 │   ├── current-resources.md
 │   ├── iac-validation.md
 │   └── testing.md
+│
+├── diagrams/
+│
+├── screenshots/
 │
 ├── .github/
 │   └── workflows/
@@ -503,7 +576,23 @@ medscan-ai-cloud-iac/
 
 ---
 
-## 14. Testing
+## 16. Dokumentation
+
+Weitere technische Dokumentation befindet sich im Ordner `docs/`.
+
+| Dokument | Beschreibung |
+|---|---|
+| [API Contract](docs/api-contract.md) | Beschreibt die HTTP-Endpunkte, Requests, Responses, Statuswerte und Fehlerfälle |
+| [Threat Model](docs/threat-model.md) | Dokumentiert zentrale Sicherheitsrisiken und Gegenmaßnahmen |
+| [Current Resources](docs/current-resources.md) | Listet die verwendeten AWS-Ressourcen der Demo- und IaC-Umgebung |
+| [IaC Validation](docs/iac-validation.md) | Dokumentiert SAM Validation, SAM Build und relevante IaC-Prüfschritte |
+| [Testing](docs/testing.md) | Beschreibt Unit Tests, lokale Testausführung, GitHub Actions Integration und End-to-End-Verifikation |
+
+Diese Dokumente ergänzen das README. Das README gibt den Überblick, während die Dateien im Ordner `docs/` einzelne technische Aspekte genauer beschreiben.
+
+---
+
+## 17. Testing
 
 Das Projekt verwendet `pytest` für automatisierte Unit Tests.
 
@@ -546,7 +635,7 @@ docs/testing.md
 
 ---
 
-## 15. Finales End-to-End-Testergebnis
+## 18. Finales End-to-End-Testergebnis
 
 Die deployte AWS-Pipeline wurde erfolgreich manuell getestet.
 
@@ -578,7 +667,7 @@ Damit wurde bestätigt, dass der vollständige Serverless-Workflow erfolgreich f
 
 ---
 
-## 16. Lokale Voraussetzungen
+## 19. Lokale Voraussetzungen
 
 ```text
 Windows
@@ -627,7 +716,7 @@ No changes to deploy. Stack medscan-ai-iac is up to date.
 
 ---
 
-## 17. Nützliche Befehle
+## 20. Nützliche Befehle
 
 ### AWS Identität prüfen
 
@@ -683,9 +772,9 @@ Erwartetes Ergebnis:
 
 ---
 
-## 18. Wichtige behobene Fehler
+## 21. Wichtige behobene Fehler
 
-### 18.1 Falsche Logmeldung in GetMedicalResult
+### 21.1 Falsche Logmeldung in GetMedicalResult
 
 Problem:
 
@@ -707,7 +796,7 @@ Nutzen:
 - weniger Verwechslung zwischen GenerateUploadUrl und GetMedicalResult
 - einfacheres Debugging
 
-### 18.2 PNG/RGBA Verarbeitung
+### 21.2 PNG/RGBA Verarbeitung
 
 Problem:
 
@@ -725,7 +814,7 @@ Nutzen:
 - weniger Modellfehler bei PNG-Dateien
 - konsistentere Eingaben für das KI-Modell
 
-### 18.3 Presigned URL Signature Version
+### 21.3 Presigned URL Signature Version
 
 Problem:
 
@@ -741,7 +830,7 @@ Nutzen:
 
 - Uploads in KMS-verschlüsselte Buckets funktionieren korrekt
 
-### 18.4 Unsichere Dateinamen
+### 21.4 Unsichere Dateinamen
 
 Problem:
 
@@ -759,7 +848,7 @@ Nutzen:
 - weniger Missbrauchspotenzial
 - bessere Eingabevalidierung
 
-### 18.5 Gradio/Hugging Face Timeout
+### 21.5 Gradio/Hugging Face Timeout
 
 Problem:
 
@@ -776,7 +865,7 @@ Nutzen:
 - Lambda hängt nicht unbegrenzt
 - Fehlerfälle werden kontrolliert behandelt
 
-### 18.6 Gradio Client Performance
+### 21.6 Gradio Client Performance
 
 Problem:
 
@@ -793,7 +882,7 @@ Nutzen:
 - bessere Performance in warmen Lambda-Containern
 - weniger unnötige Initialisierung
 
-### 18.7 Processing Result Handling
+### 21.7 Processing Result Handling
 
 Problem:
 
@@ -813,9 +902,9 @@ Nutzen:
 
 ---
 
-## 19. Was bewusst nicht umgesetzt wurde
+## 22. Was bewusst nicht umgesetzt wurde
 
-### Kein automatisches GitHub-to-AWS Deployment
+### 22.1 Kein automatisches GitHub-to-AWS Deployment
 
 Es wurde keine vollständige CD-Pipeline eingerichtet.
 
@@ -830,13 +919,13 @@ GitHub Actions = CI, Build, Tests
 AWS SAM = manuelles Deployment
 ```
 
-### Kein CloudFront
+### 22.2 Kein CloudFront
 
 CloudFront wäre für eine produktionsnahe Version sinnvoll, besonders für HTTPS, Caching und einen professionellen Webzugriff.
 
 Grund für Nicht-Umsetzung:
 
-Für den Prototyp wurde der einfache S3 Static Website Endpoint verwendet. In der AWS Academy Umgebung war die zusätzliche CloudFront-Konfiguration nicht der Schwerpunkt.
+Für den Prototyp wurde der einfache S3 Static Website Endpoint verwendet. In der AWS Academy Umgebung war CloudFront nicht Schwerpunkt der Umsetzung.
 
 Mögliche Verbesserung:
 
@@ -844,7 +933,7 @@ Mögliche Verbesserung:
 CloudFront + HTTPS + Origin Access Control
 ```
 
-### Keine Benutzeranmeldung
+### 22.3 Keine Benutzeranmeldung
 
 Es wurde keine Authentifizierung mit Amazon Cognito umgesetzt.
 
@@ -858,7 +947,7 @@ Mögliche Verbesserung:
 Amazon Cognito + API Gateway Authorizer
 ```
 
-### Kein Rate Limiting / WAF
+### 22.4 Kein Rate Limiting / WAF
 
 Rate Limiting oder AWS WAF wurden nicht umgesetzt.
 
@@ -874,7 +963,7 @@ AWS WAF
 Request throttling
 ```
 
-### Kein internes Modellhosting in AWS
+### 22.5 Kein internes Modellhosting in AWS
 
 Das KI-Modell wird extern über Hugging Face Gradio aufgerufen.
 
@@ -888,7 +977,7 @@ Mögliche Verbesserung:
 Amazon SageMaker Endpoint
 ```
 
-### Keine private VPC
+### 22.6 Keine private VPC
 
 Die Lambda-Funktionen wurden nicht in eine private VPC gelegt.
 
@@ -898,7 +987,7 @@ Die verwendeten Serverless-Dienste benötigen für diesen Prototyp keine private
 
 ---
 
-## 20. AI-Assisted Review and Development Note
+## 23. AI-Assisted Review and Development Note
 
 Während der Entwicklung wurde ein KI-Assistent, darunter Claude, unterstützend eingesetzt.
 
@@ -926,7 +1015,7 @@ Die Verantwortung für Architektur, Implementierung, Testing, Deployment und Dok
 
 ---
 
-## 21. Warum diese Dienste verwendet wurden
+## 24. Warum diese Dienste verwendet wurden
 
 ### Warum Amazon S3?
 
@@ -962,27 +1051,7 @@ GitHub Actions überprüft automatisch, ob das Projekt baubar und testbar bleibt
 
 ---
 
-## 22. Warum bestimmte Dienste nicht verwendet wurden
-
-### Warum nicht EC2?
-
-EC2 würde Serveradministration, Patching und Skalierung erfordern. Für diesen Prototyp ist Lambda passender.
-
-### Warum nicht RDS?
-
-Das Projekt benötigt keine relationalen Joins oder komplexen Transaktionen. DynamoDB ist ausreichend und serverlos.
-
-### Warum nicht nur direkt S3 zu Lambda?
-
-SQS ergänzt Pufferung, Wiederholungslogik und Fehlerisolation.
-
-### Warum keine private VPC?
-
-Die verwendeten Serverless-Dienste benötigen für diesen Prototyp keine privaten Subnetze. Eine VPC würde die Architektur komplexer machen, ohne für diesen Use Case einen klaren Nutzen zu bringen.
-
----
-
-## 23. Einschränkungen
+## 25. Einschränkungen
 
 Dieses Projekt ist ein Prototyp und hat folgende Einschränkungen:
 
@@ -998,7 +1067,7 @@ Dieses Projekt ist ein Prototyp und hat folgende Einschränkungen:
 
 ---
 
-## 24. Mögliche Weiterentwicklungen
+## 26. Mögliche Weiterentwicklungen
 
 - Amazon CloudFront mit HTTPS
 - Amazon Cognito für Benutzeranmeldung
@@ -1016,7 +1085,7 @@ Dieses Projekt ist ein Prototyp und hat folgende Einschränkungen:
 
 ---
 
-## 25. Medizinischer Hinweis
+## 27. Medizinischer Hinweis
 
 Dieses Projekt dient ausschließlich Bildungs- und Demonstrationszwecken.
 
@@ -1025,7 +1094,7 @@ Alle Ergebnisse müssen von qualifiziertem medizinischem Fachpersonal überprüf
 
 ---
 
-## 26. Projektstatus
+## 28. Projektstatus
 
 Aktueller Stand:
 
@@ -1063,7 +1132,7 @@ Kein automatisches GitHub-to-AWS CD eingerichtet
 
 ---
 
-## 27. Autor
+## 29. Autor
 
 ```text
 Ayman Meseleklayame
