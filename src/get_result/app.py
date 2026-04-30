@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from decimal import Decimal
 
 import boto3
@@ -19,6 +20,28 @@ table = dynamodb.Table(TABLE_NAME)
 
 
 # =========================
+# Constants
+# =========================
+VALID_ID_PATTERN = re.compile(
+    r"^medical-input/[A-Za-z0-9._\-/]+$"
+)
+
+
+# =========================
+# Helper: Decimal -> JSON
+# DynamoDB returns Decimal values.
+# json.dumps cannot serialize Decimal directly.
+# =========================
+def decimal_default(obj):
+    if isinstance(obj, Decimal):
+        if obj % 1 == 0:
+            return int(obj)
+        return float(obj)
+
+    raise TypeError
+
+
+# =========================
 # Helper: JSON response
 # =========================
 def response(status_code, body):
@@ -35,27 +58,34 @@ def response(status_code, body):
 
 
 # =========================
-# Helper: Decimal -> JSON
-# DynamoDB returns Decimal values.
-# json.dumps cannot serialize Decimal directly.
-# =========================
-def decimal_default(obj):
-    if isinstance(obj, Decimal):
-        # Convert integers cleanly, decimals as float
-        if obj % 1 == 0:
-            return int(obj)
-        return float(obj)
-
-    raise TypeError
-
-
-# =========================
 # Helper: extract query parameter
 # Supports HTTP API / REST API event shapes
 # =========================
 def get_query_param(event, name):
     params = event.get("queryStringParameters") or {}
     return params.get(name)
+
+
+# =========================
+# Helper: validate result id
+# =========================
+def is_valid_result_id(image_id):
+    if not image_id:
+        return False
+
+    if not isinstance(image_id, str):
+        return False
+
+    if len(image_id) > 512:
+        return False
+
+    if not VALID_ID_PATTERN.match(image_id):
+        return False
+
+    if ".." in image_id:
+        return False
+
+    return True
 
 
 # =========================
@@ -68,6 +98,12 @@ def lambda_handler(event, context):
         if not image_id:
             return response(400, {
                 "error": "Missing id parameter"
+            })
+
+        if not is_valid_result_id(image_id):
+            return response(400, {
+                "error": "Invalid id parameter",
+                "message": "The id must be a valid S3 object key under medical-input/."
             })
 
         dynamodb_response = table.get_item(
@@ -85,8 +121,6 @@ def lambda_handler(event, context):
                 "id": image_id
             })
 
-        # Return a clean frontend response.
-        # If some fields are missing, use safe defaults.
         return response(200, {
             "id": item.get("id", image_id),
             "status": item.get("status", "UNKNOWN"),
@@ -113,9 +147,7 @@ def lambda_handler(event, context):
         })
 
     except Exception as e:
-        print("Error reading medical result:", str(e))
-
+        print("Error generating upload URL:", str(e))
         return response(500, {
-            "error": "Internal server error",
-            "details": str(e)
-        })
+            "error": "Internal server error"
+    })

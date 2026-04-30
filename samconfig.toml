@@ -1,0 +1,14 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "medscan-ai-iac"
+resolve_s3 = true
+s3_prefix = "medscan-ai-iac"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "ProjectName=\"medscan-ai\" ExistingLambdaRoleArn=\"arn:aws:iam::969514361475:role/LabRole\" FrontendBucketName=\"medical-xray-web-ayman-iac\" MedicalBucketName=\"medical-xray-input-ayman-iac\" MetadataTableName=\"ImageProcessingMetadataIac\" ProcessingQueueName=\"medical-xray-processing-queue-iac\" DeadLetterQueueName=\"medical-xray-processing-dlq-iac\" DashboardName=\"MedScanAI-Operations-Dashboard-IaC\""
+image_repositories = []
+
+[default.global.parameters]
+region = "us-east-1"

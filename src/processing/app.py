@@ -560,7 +560,7 @@ def lambda_handler(event, context):
         print(f"Processed image saved: {processed_key}")
         print(f"Processed SHA-256: {processed_sha256}")
 
-        # Temporary file for Gradio
+          # Temporary file for Gradio
         file_extension = ".jpg"
         if content_type == "image/png":
             file_extension = ".png"
@@ -575,7 +575,7 @@ def lambda_handler(event, context):
 
         except Exception as hf_error:
             print("Gradio/Hugging Face error:", str(hf_error))
-        medical_result = build_model_error_result(str(hf_error))
+            medical_result = build_model_error_result(str(hf_error))
 
         print("Medical Result:", medical_result)
 

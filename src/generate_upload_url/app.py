@@ -4,9 +4,12 @@ import uuid
 from datetime import datetime, timezone
 
 import boto3
+from botocore.config import Config
 
-
-s3 = boto3.client("s3")
+s3 = boto3.client(
+    "s3",
+    config=Config(signature_version="s3v4")
+)
 
 BUCKET_NAME = os.environ.get("BUCKET_NAME")
 UPLOAD_PREFIX = os.environ.get("UPLOAD_PREFIX", "medical-input/")
@@ -78,5 +81,5 @@ def lambda_handler(event, context):
     except Exception as e:
         print("Error generating upload URL:", str(e))
         return response(500, {
-            "error": str(e)
-        })
+            "error": "Internal server error"
+    })
